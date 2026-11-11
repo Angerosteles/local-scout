@@ -153,6 +153,20 @@ class PromptGuardRegressionTests(unittest.TestCase):
         masked = json.loads(out['request']['messages'][1]['tool_calls'][0]['function']['arguments'])
         self.assertNotIn('hunter2', masked['command']); self.assertEqual(masked['to'], '[EMAIL]')
 
+    def test_personal_data_in_argument_keys_is_masked(self):
+        import json
+        args = json.dumps({'jane.roe@example.com': 'send', 'a@example.com': 1, 'b@example.com': 2})
+        out = self.guard(request={'messages': [{'role': 'user', 'content': 'go'}, {'role': 'assistant', 'content': None,
+                         'tool_calls': [{'id': 'c', 'type': 'function', 'function': {'name': 'sh', 'arguments': args}}]}]}, api_mode='chat_completions')
+        raw = out['request']['messages'][1]['tool_calls'][0]['function']['arguments']
+        masked = json.loads(raw)
+        self.assertNotIn('@example.com', raw)
+        self.assertEqual(sorted(masked), ['[EMAIL]', '[EMAIL]#2', '[EMAIL]#3'])
+        self.assertEqual(sorted(masked.values(), key=str), [1, 2, 'send'])
+        blocks = [{'role': 'assistant', 'content': [{'type': 'tool_use', 'id': 't', 'name': 'mail', 'input': {'jane.roe@example.com': 'hi'}}]}]
+        new = self.guard(request={'messages': blocks}, api_mode='anthropic_messages')['request']['messages'][0]['content'][0]['input']
+        self.assertEqual(new, {'[EMAIL]': 'hi'})
+
     def test_auxiliary_parity(self):
         msgs = [{'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'c', 'type': 'function', 'function': {'name': 's', 'arguments': '{"to":"jane.roe@example.com"}'}}]},
                 {'role': 'developer', 'content': 'mail a@example.com'}]

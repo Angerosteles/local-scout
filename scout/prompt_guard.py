@@ -31,13 +31,25 @@ class PromptGuard:
     TEXT_TYPES = ('text', 'input_text', 'output_text')
 
     def _leaves(self, value, found):
-        """Mask string leaves of a JSON-like value (dict keys and non-strings untouched)."""
+        """Mask string leaves and string keys of a JSON-like value; other types are untouched.
+
+        Keys are masked like values (as in tool results). If two keys become equal after masking, the later ones
+        get a deterministic suffix ([EMAIL]#2): the JSON stays valid and distinct, and no value leaks. Withholding is
+        not an option here, because these are tool-call arguments in the conversation history."""
         if isinstance(value, str):
             masked, cats = self.scan(value)
             found.update(cats)
             return masked
         if isinstance(value, dict):
-            return {k: self._leaves(v, found) for k, v in value.items()}
+            out = {}
+            for key, child in value.items():
+                if isinstance(key, str):
+                    key = self._leaves(key, found)
+                    base, n = key, 2
+                    while key in out:
+                        key, n = f'{base}#{n}', n + 1
+                out[key] = self._leaves(child, found)
+            return out
         if isinstance(value, list):
             return [self._leaves(v, found) for v in value]
         return value

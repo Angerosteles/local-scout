@@ -64,7 +64,7 @@ Commands explain permissions in plain English before changing anything. Start a 
 ## Evidence you can inspect
 
 - **Masking:** on the Gretel synthetic PII test, span recall was 100% for e-mails, 96% for cards, 94% for SSNs and 88% for phones. Complete address masking was 75.2%; prompt-name token recall/precision was 95.7%/67.9%. These are dataset measurements. [Detector evaluation](docs/EVIDENCE.md#content-safety).
-- **Speed and integration:** masking a 331-character e-mail took a median 0.8 ms on a laptop CPU (warm). 233 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
+- **Speed and integration:** masking a 331-character e-mail took a median 0.8 ms on a laptop CPU (warm). 234 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
 - **Injection:** recall was 97% on Gandalf and 57% on deepset, with false positives up to 2% on the reported negative sets. [Scope and datasets](docs/EVIDENCE.md#content-safety).
 - **Triage savings:** a paired 20-message benchmark measured 18.8–19.4% fewer **main-call tokens** on supported chat providers; title calls reduced the overall saving, and Codex Responses showed no saving. Small runs do not establish statistical significance or predict your workload. [Measured savings](docs/EVIDENCE.md#measured-savings).
 
