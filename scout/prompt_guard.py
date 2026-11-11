@@ -28,16 +28,18 @@ class PromptGuard:
             raise ValueError('oversize')
         config = self.scout.profile()['config']
         engine = config.get('basal_url') if names and isinstance(config, dict) else None
-        key = hashlib.sha256('\0'.join(('N' if names else '-', str(field or ''), str(engine or ''), text))
-                             .encode('utf-8', 'surrogatepass')).digest()
-        if key in self.cache:
-            return self.cache[key]
         # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
         # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
         check = None
         if engine:
             shared = _REQUEST_CHECK.get()
             check = None if shared is _NO_BASAL else (shared or basal.credential_checker(config))
+        # The cache key includes whether the engine is consulted: a title-call scan without basal must not stand in
+        # for a main-request scan with it.
+        key = hashlib.sha256('\0'.join(('N' if names else '-', str(field or ''), str(engine or ''),
+                                        'B' if check else '0', text)).encode('utf-8', 'surrogatepass')).digest()
+        if key in self.cache:
+            return self.cache[key]
         state = {'degraded': False}
         context = credentials.CONTEXT.set(('prompt' if names else 'text', check, state))
         try:
@@ -102,6 +104,13 @@ class PromptGuard:
         return json.dumps(new, ensure_ascii=False)
 
     def message(self, item, content_key, source, names=False, marker=True):
+        token = credentials.MEMO.set({})       # basal answers are shared within this message only
+        try:
+            return self._message(item, content_key, source, names, marker)
+        finally:
+            credentials.MEMO.reset(token)
+
+    def _message(self, item, content_key, source, names=False, marker=True):
         """Return (new item, categories, action) for one message, block by block.
 
         Scanned: text/input_text/output_text blocks, tool_result content and tool_use input leaves.
@@ -147,10 +156,9 @@ class PromptGuard:
                         value, found = self.scan(inner)
                         categories.update(found)
                         new_content.append(dict(block, content=value) if found else block)
-                    elif isinstance(inner, list) and self._merge_split_text(inner) is not None:
-                        merged, merged_found = self._merge_split_text(inner)
-                        categories.update(merged_found)
-                        new_content.append(dict(block, content=merged))
+                    elif isinstance(inner, list) and (merged_inner := self._merge_split_text(inner)) is not None:
+                        categories.update(merged_inner[1])
+                        new_content.append(dict(block, content=merged_inner[0]))
                     elif isinstance(inner, list):
                         local = set()
                         blocks = [dict(b, text=self._leaves(b['text'], local)) if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES and isinstance(b.get('text'), str) else b for b in inner]
@@ -315,6 +323,13 @@ class PromptGuard:
         return new, categories, action, source
 
     def _merge_split_text(self, blocks):
+        token = credentials.MEMO.set(credentials.MEMO.get() if credentials.MEMO.get() is not None else {})
+        try:
+            return self._merge_split(blocks)
+        finally:
+            credentials.MEMO.reset(token)
+
+    def _merge_split(self, blocks):
         """Text blocks whose detected data appears only when joined: return them merged into one masked block of the
         first text type (other blocks kept after it) with the categories found; None when block-by-block masking
         already covers everything."""

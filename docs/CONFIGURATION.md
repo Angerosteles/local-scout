@@ -85,8 +85,8 @@ python -m plugin.cli --home /path/to/profile configure --mode on_demand \
 
 `--approve` replaces all grants. `answer` is a separate, dataset-scoped permission; neither
 training nor masking permission enables local replies. With no `--answer-task` configured,
-local replies are disabled. Optionally add `--answer-marker 'TASK:'`: only the text after
-the marker must occur **exactly once** in the final user message and only the text after it is
+local replies are disabled. Optionally add `--answer-marker 'TASK:'`:
+the marker must occur **exactly once** in the final user message, and only the text after it is
 classified; a missing or repeated marker forwards to the model. Without a configured marker, Scout classifies the entire final user message.
 Omitted options preserve an existing configuration. Use an explicit dedicated triage profile:
 the shortcut answers every eligible turn in that profile, rather than deciding whether a
@@ -127,9 +127,8 @@ models always forward here (seconds per ticket). There are no background loaders
 
 Insights records `kind=local_answer` only with `insights` or `observe` consent and while mode
 is enabled: answered/forwarded counters, a small allowlist of forwarding reasons, and
-`estimated_input_tokens_avoided`. This is an estimate; one live comparison showed about 4.7×
-above measured input, and it is not an upper-bound guarantee. TUI and HTML show measured input
-usage beside it when available. No prompt, class label, session ID or exception prose is
+`estimated_input_tokens_avoided` (an estimate, see the known limitation below). TUI and HTML show
+measured input usage beside it when available. No prompt, class label, session ID or exception prose is
 stored. `summarize` and `community_payload` expose
 `local_answers {answered, forwarded, estimated_input_tokens_avoided}` and an allowlisted
 forwarded-reason breakdown; public reason and PII category counts below five are omitted.

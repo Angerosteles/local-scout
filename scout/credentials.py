@@ -11,9 +11,10 @@ Cues stay within their field, and identifier fragments count as cues only in ass
 * low <= score < high: masked only when a local basal engine is registered and says the line holds a usable
   credential; then up to ``NEIGHBOURS`` lines above and below are asked too, because a credential block
   ("login: …" / "password: …") often spans lines.
-* Without basal, or when it fails or the per-text call budget is spent, only the high threshold applies.
+* Without basal, or when it fails or the request's time budget is spent, only the high threshold applies.
 
-The guards set ``CONTEXT`` (source, confirm); everything else gets the deterministic text thresholds.
+The guards set ``CONTEXT`` (source, confirm, state) and ``MEMO``; everything else gets the deterministic text
+thresholds. A JSON field name reaches the detectors as a "name: " prefix added by ``privacy.mask_local_details``.
 Nothing here stores or logs text.
 """
 import bisect
@@ -23,13 +24,14 @@ import time
 from contextvars import ContextVar
 
 CONTEXT = ContextVar('local_scout_credential_context', default=None)
-# Name of the JSON field a value came from ("otp_code", "password"): detection sees "name: value", masks only the value.
-FIELD = ContextVar('local_scout_credential_field', default=None)
+# Remembered basal answers for one message or tool result (set by the guards): a message scanned as a whole and
+# block by block gets the same answers, while another message with the same value is judged in its own context.
+MEMO = ContextVar('local_scout_credential_memo', default=None)
 
 # (low, high), chosen on the Gretel validation split and checked on TechQA and tool-call results (see docs/EVIDENCE.md).
 THRESHOLDS = {'prompt': (0.45, 0.55), 'text': (0.50, 0.60), 'terminal': (0.65, 0.75)}
 CONFIRM_AT = 0.5        # basal probability that confirms a line
-NEIGHBOURS = 1          # lines above and below asked after a confirmed or masked line
+NEIGHBOURS = 1          # lines above and below asked after the engine confirmed a line
 MAX_CALLS = 6           # basal calls per text; then deterministic only
 TIME_BUDGET = 8.0       # seconds of basal calls per tool result or prompt (shared deadline, see basal.credential_checker)
 WINDOW = 300            # characters of context around a candidate sent to the engine
@@ -87,7 +89,7 @@ _EXCLUDE = [
     re.compile(r'^[\d\W_]+$'),                                          # digits and punctuation only
     re.compile(r'=$|\w\([^)]*=|^[~$]?\{\w|\(\?[:=!<]'),                   # open assignments, keyword calls, f-strings, regex groups
     re.compile(r'^~?\d+(?:\.\d+)?/[A-Za-z]+$'),                           # rates: ~6/sec
-    re.compile(r'(?:^|[^A-Za-z0-9_])[a-z][a-z0-9_]{2,}[\[(]|[a-z_]{2,}\.[a-z_]{2,}\(|^(?=.*[a-z_]{3,}).*[)\]][.\[(+\-*/,][A-Za-z_0-9(]'),  # code expressions: item[0], x).encode(, 0)+value
+    re.compile(r'(?:^|[\s(\[.,=+\-*/:])[a-z][a-z0-9_]{2,}[\[(]|[a-z_]{2,}\.[a-z_]{2,}\(|^(?=.*[a-z_]{3,}).*[)\]][.\[(+\-*/,][A-Za-z_0-9(]'),  # code expressions: item[0], x).encode(, 0)+value
 ]
 # Code notation. Applied only to tokens with fewer than three distinct symbols: a call such as foo(bar1) has one or
 # two kinds, while a generated password packs many (#pt(1hy)hW_3BF+1N2).
@@ -142,23 +144,6 @@ def _direct_cue(before, cues):
     return bool(words and _is_cue(words[-1], cues))
 
 
-def _osa(a, b, limit=1):
-    """Optimal string alignment distance, capped at limit+1."""
-    if abs(len(a) - len(b)) > limit:
-        return limit + 1
-    prev2, prev = None, list(range(len(b) + 1))
-    for i, ca in enumerate(a, 1):
-        cur = [i] + [0] * len(b)
-        for j, cb in enumerate(b, 1):
-            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb))
-            if prev2 is not None and i > 1 and j > 1 and ca == b[j - 2] and a[i - 2] == cb:
-                cur[j] = min(cur[j], prev2[j - 2] + 1)
-        if min(cur) > limit:
-            return limit + 1
-        prev2, prev = prev, cur
-    return prev[-1]
-
-
 _LETTERS = 'abcdefghijklmnopqrstuvwxyz'
 
 
@@ -183,7 +168,7 @@ def _vocabulary(cues):
     """Exact cues and their plurals, plus one-typo variants of cues with five or more letters (built once)."""
     # One-typo variants only for cues of six or more letters: five-letter ones collide with ordinary words
     # (token/taken, login/logic, pword/word) and passwd with "passed". Plurals only where they keep the meaning
-    # ("tokens" in LLM text counts context, not credentials). Found by Argon (argon-scout-fp).
+    # ("tokens" in LLM text counts context, not credentials).
     exact = set(cues) | {c + 's' for c in cues if c in _PLURAL_CUES}
     fuzzy = set().union(*(_one_edit(c) for c in cues if len(c) >= 6 and c != 'passwd')) if cues else set()
     prefixes = {c for c in cues if c in _COMPOUND}
@@ -200,11 +185,6 @@ def _is_cue(word, cues):
     known, prefixes, lengths = vocab
     word = word.lower()
     return word in known or any(word[:n] in prefixes for n in lengths if len(word) > n)
-
-
-def cue_strength(before):
-    """Strongest cue among the words just before a token on the same line (0, .12, .25 or .40)."""
-    return _cue_score(_near_context(before))
 
 
 def _cue_score(near):
@@ -383,16 +363,6 @@ def _best_token(text, lo, hi):
 
 
 def spans(text):
-    """Spans (start, end, kind) to mask; a JSON field name from FIELD is used as context but never masked."""
-    field = FIELD.get()
-    if field:
-        probe = re.sub(r'[^A-Za-z0-9 _-]', ' ', field)[:64].replace('_', ' ') + ': '
-        n = len(probe)
-        return [(a - n, b - n, kind) for a, b, kind in _spans(probe + text) if a >= n]
-    return _spans(text)
-
-
-def _spans(text):
     """Spans (start, end, kind) to mask, using the source and optional basal check from CONTEXT."""
     if len(text) < MIN_LEN - 2:
         return []
@@ -413,9 +383,9 @@ def _spans(text):
         starts.append(starts[-1] + len(item) + 1)
     budget = [MAX_CALLS]
     deadline = time.monotonic() + TIME_BUDGET
-    # Answers are remembered per candidate value for the whole request when the checker carries a memo (a message
-    # scanned as a whole and block by block then gets the same answers, even after the time budget is spent).
-    asked = getattr(confirm, 'memo', None)
+    asked = MEMO.get()
+    if not isinstance(asked, dict):
+        asked = getattr(confirm, 'memo', None)        # one tool result: the checker's own memo
     if not isinstance(asked, dict):
         asked = {}
 
@@ -423,6 +393,8 @@ def _spans(text):
         """Engine probability for one piece of text (cached); None when the budget is spent or it failed."""
         key = key or ('line', segment)
         if key in asked:
+            if asked[key] is None and state is not None:
+                state['degraded'] = True     # remembered failure: the result must not be cached either
             return asked[key]
         if not segment.strip():
             return None
@@ -430,12 +402,15 @@ def _spans(text):
             if state is not None:
                 state['degraded'] = True
             return None
+        if ('segment', segment) in asked:      # two candidates in the same window: one question
+            asked[key] = asked[('segment', segment)]
+            return asked[key]
         budget[0] -= 1
         try:
-            asked[key] = confirm(segment)
+            asked[key] = asked[('segment', segment)] = confirm(segment)
         except Exception:
             budget[0] = 0      # engine failed: deterministic only for the rest of this text
-            asked[key] = None
+            asked[key] = asked[('segment', segment)] = None
             if state is not None:
                 state['degraded'] = True
         return asked[key]

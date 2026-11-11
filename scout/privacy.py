@@ -174,26 +174,38 @@ def _normalise_for_detection(text):
     return (clean, index) if clean != text else (text, None)
 
 
+def _field_probe(field):
+    """'cvv: ' for a JSON field named cvv: the name becomes context for every detector, never part of a mask."""
+    if not isinstance(field, str) or not field:
+        return ''
+    return re.sub(r'[^A-Za-z0-9 -]', ' ', field.replace('_', ' '))[:64].strip() + ': '
+
+
 def mask_local_details(text, names=False, field=None):
     """Mask detected PII. names=True adds the person-name detector (used for user prompts; see name_model).
-    field: name of the JSON field the text came from, used only as context for password-like values."""
+    field: name of the JSON field the text came from ({"cvv": "402"}, {"otp_code": 543918}); it is detection
+    context only, so the field name itself is never masked or changed."""
     token = pii_model._CANDIDATE_BUDGET.set(pii_model.MASK_CANDIDATE_LIMIT)
-    field_token = credentials.FIELD.set(field if isinstance(field, str) and field else None)
     try:
         # zero-width characters, full-width forms and Unicode hyphens hid e-mails,
         # cards and phones from every detector. Detect on a normalised copy, then map spans back to the original.
         clean, index = _normalise_for_detection(text)
+        probe = _field_probe(field)
+        work = probe + clean
         # password-like values without a known format (source thresholds, optional basal check: see credentials)
-        found = spans(clean) + credentials.spans(clean)
+        found = spans(work) + credentials.spans(work)
         if names:
             from . import name_model
-            found = found + name_model.spans(clean)
+            found = found + name_model.spans(work)
+        if probe:
+            # a span reaching from the probe into the value ("cvv: 402") masks the value part only
+            n = len(probe)
+            found = [(max(s, n) - n, e - n, c) for s, e, c in found if e > n]
         if clean is not text:
             found = [(index[s], index[e - 1] + 1, c) for s, e, c in found if e > s]
         matches = sorted(found, key=lambda item: (item[0], -(item[1]-item[0])))
     finally:
         pii_model._CANDIDATE_BUDGET.reset(token)
-        credentials.FIELD.reset(field_token)
     # overlapping spans of different categories are UNITED, never
     # dropped — skipping a later overlapping span leaked the rest of an e-mail, card or secret. The region is
     # labelled with its longest span's category; every category in it is reported.

@@ -37,13 +37,6 @@ Customer, order and ticket IDs, dates, e-mail subjects and **person names in too
 - **Insights — in this release.** Local summaries of masking categories and sources, injection alerts, local answers, forwarding reasons and observed usage. Never the text itself; exports are explicit and local.
 - **Context guard — branch only.** The `context-guard` branch experiments with asking for human approval of suspicious outgoing calls using session context. **It is not part of this release.** It has known misses and false alarms. [Branch results and limitations](docs/CONTEXT_GUARD.md).
 
-## What's next?
-
-Local Scout is the fast first layer of a planned decision cascade: Scout handles confident cases, basal takes harder ones, and the LLM remains the fallback.
-In offline experiments, basal also acts as a teacher, providing high-confidence labels to improve Scout. The goal is to gradually shift more decisions to the lightweight local model while maintaining measurable, calibrated error rates.
-Longer term, the project aims to support multimodal decision-making, including text, images, and audio.
-The triage cascade, teacher loop, and multimodal capabilities are not part of this release; password masking already uses basal as an optional second opinion.
-
 ## Quick start
 
 Requires Hermes `>=0.23.0,<0.24.0` and Python `>=3.11,<3.15`, on Linux or macOS.
@@ -70,7 +63,7 @@ scout configure --mode off
 ## Evidence you can inspect
 
 - **Masking:** on the Gretel synthetic PII test, span recall was 100% for e-mails, 96% for cards, 94% for SSNs and 88% for phones. Complete address masking was 75.2%; prompt-name token recall/precision was 95.7%/67.9%. These are dataset measurements. [Detector evaluation](docs/EVIDENCE.md#content-safety).
-- **Speed and integration:** masking a 331-character e-mail took a median 0.9 ms on a laptop CPU (warm). 283 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
+- **Speed and integration:** masking a 331-character e-mail took a median below 1 ms on a laptop CPU (warm). 287 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
 - **Passwords:** on the Gretel test split, which was not used to choose thresholds, 50 of 59 passwords were masked without basal (13 of 59 before password-like detection). Outside labelled entities it masked 3 tokens in 5,000 documents, all of them unlabelled credentials (a one-time code, a verification code, `admin123`). On 1,506 technical Q&A texts (TechQA) it masked nothing; on 1,100 tool-call results 11 tokens, each a credential on inspection (`Password: securePass123`, `auth_token`); on 356 of Hermes' own source and documentation files 2 tokens. With the optional basal pico second opinion, 52 of 59 passwords were masked, for 1 more false token. [Thresholds and the basal second opinion](docs/EVIDENCE.md#passwords-and-pins).
 - **Injection:** recall was 97% on Gandalf and 57% on deepset, with false positives up to 2% on the reported negative sets. [Scope and datasets](docs/EVIDENCE.md#content-safety).
 - **Triage savings:** a paired 20-message benchmark measured 18.8–19.4% fewer **main-call tokens** on supported chat providers; title calls reduced the overall saving, and Codex Responses showed no saving. Small runs do not establish statistical significance or predict your workload. [Measured savings](docs/EVIDENCE.md#measured-savings).
@@ -83,6 +76,13 @@ scout configure --mode off
 - Consent and compatible Hermes middleware are required. Scan failures withhold user content by default; system prompts are kept (data split across text blocks is merged into one masked block), and only a failure of the whole masking step replaces the request (fail-closed); `LOCAL_SCOUT_GUARD_MODE=open` is the explicit fail-open option. If a Hermes middleware call itself fails, Hermes continues with the original request, and safe-worker mode can bypass plugins. Auxiliary masking is best effort: verify outgoing payloads for your deployment.
 - On Discord, Hermes names a new thread after its first message and copies that title into the system prompt. Detected values are masked there too, but person names are not. [Operational caveats](docs/SECURITY.md#auxiliary-calls-and-prompt-privacy-hermes-023).
 - Scout makes no network calls except optional basal requests to loopback for triage and uncertain password candidates (no proxies, no redirects). It reads content Hermes passes to plugin hooks and middleware, the selected profile's `config.yaml` (title settings), and history files you name. State stays in its plugin-data directory (the `scout` launcher adds one link under `~/.cache/local-scout`). It runs no shell commands, starts no background processes and stores no provider credentials. Local training artifacts can retain vocabulary; protect them separately from the narrower Insights export. [Full disclosures](docs/SECURITY.md#disclosures).
+
+## What's next?
+
+Local Scout is the fast first layer of a planned decision cascade: Scout handles confident cases, basal takes harder ones, and the LLM remains the fallback.
+In offline experiments, basal also acts as a teacher, providing high-confidence labels to improve Scout. The goal is to gradually shift more decisions to the lightweight local model while maintaining measurable, calibrated error rates.
+Longer term, the project aims to support multimodal decision-making, including text, images, and audio.
+The triage cascade, teacher loop, and multimodal capabilities are not part of this release; password masking already uses basal as an optional second opinion.
 
 ## How it was built
 

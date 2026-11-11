@@ -5,6 +5,7 @@ step can be scripted. The menu never enables anything on its own; it calls the s
 """
 import argparse
 from pathlib import Path
+import shlex
 
 MASK_SCOPES = ('observe', 'report', 'insights', 'mask')
 MODES = {'1': ('background', 'masking and flags as granted, no notices'),
@@ -76,8 +77,9 @@ def setup_triage(scout, ask, say):
     from .setup_triage import run
     result = run(scout, args)  # explains the permissions and asks for confirmation itself
     say('Ready: {examples} examples, {classes} classes; threshold {threshold:.2f}.'.format(**result))
-    say('Same as: scout setup-triage --history ' + str(path) + (f' --marker "{marker}"' if marker else '') +
-        (' --mask-prompts' if args.mask_prompts else ''))
+    command = ['scout', 'setup-triage', '--history', str(path)] + (['--marker', marker] if marker else []) + \
+        (['--mask-prompts'] if args.mask_prompts else [])
+    say('Same as: ' + shlex.join(command))
 
 
 def show_insights(scout, ask, say):

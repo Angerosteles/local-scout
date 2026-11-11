@@ -358,3 +358,60 @@ class BughuntRegressions(unittest.TestCase):
         text = ' '.join(r['text'] for r in prepared)
         self.assertNotIn('4821', text)
         self.assertNotIn('IkXzYx33@$', text)
+
+
+class FinalReviewRegressions(unittest.TestCase):
+    """Final review (Sol, 11.11 evening): each case leaked, broke or mis-cached before the fix."""
+    class Fake:
+        def profile(self):
+            return {'config': {'mode': 'report', 'grants': {'mask': ['profile']}, 'basal_url': 'http://127.0.0.1:9'}}
+
+    def test_field_names_reach_every_detector(self):
+        from plugin.scout import tool_guard
+        for raw, label, value in (('{"cvv": "402"}', '[CVV]', '402'), ('{"phone": "1234567"}', '[PHONE]', '1234567'),
+                                  ('{"card_number": "1111 0000 4444 5555"}', '[CARD]', '1111 0000 4444 5555')):
+            with self.subTest(raw=raw):
+                out = tool_guard.transform(raw, 'tool_result', 'x')[0]
+                self.assertIn(label, out)
+                self.assertNotIn(value, out)
+                self.assertIn(json.loads(raw).popitem()[0], json.loads(out))      # the field name stays as it was
+        g = PromptGuard(self.Fake())
+        with patch.object(basal, 'credential_probability', return_value=0.0):
+            req = {'messages': [{'role': 'assistant', 'content': None, 'tool_calls': [
+                {'id': 't', 'type': 'function', 'function': {'name': 'f', 'arguments': '{"cvv": "402", "phone": "1234567"}'}}]}]}
+            out = g(req)
+        args = json.loads(out['request']['messages'][0]['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(args, {'cvv': '[CVV]', 'phone': '[PHONE]'})
+
+    def test_generated_password_with_a_word_before_a_bracket(self):
+        self.assertEqual(masked('pwd #apt(1hy)hW_3BF+1N2'), 'pwd [SECRET]')
+
+    def test_remembered_failure_is_not_cached_and_aux_does_not_stand_in(self):
+        text = 'table cell Kx7Rz2Qp9 here'
+        g = PromptGuard(self.Fake())
+        with patch.object(basal, 'credential_probability', side_effect=basal.Unavailable('down')):
+            g({'messages': [{'role': 'user', 'content': text}, {'role': 'user', 'content': text}]})
+        with patch.object(basal, 'credential_probability', return_value=0.95):
+            self.assertIn('[SECRET]', json.dumps(g({'messages': [{'role': 'user', 'content': text}]})))
+        g = PromptGuard(self.Fake())
+        messages = [{'role': 'user', 'content': text}]
+        with patch.object(basal, 'credential_probability', return_value=0.95) as ask:
+            g.auxiliary(messages)                                  # title call: no engine
+            self.assertEqual(ask.call_count, 0)
+            self.assertIn('[SECRET]', json.dumps(g({'messages': [{'role': 'user', 'content': text}]})))
+
+    def test_answers_do_not_cross_messages_and_one_window_one_question(self):
+        g = PromptGuard(self.Fake())
+        asked = []
+
+        def judge(url, segment, timeout=None):
+            asked.append(segment)
+            return 0.95 if 'password' in segment else 0.05
+        with patch.object(basal, 'credential_probability', side_effect=judge):
+            out = json.dumps(g({'messages': [{'role': 'user', 'content': 'table cell Kx7Rz2Qp9 here'},
+                                             {'role': 'user', 'content': 'Kx7Rz2Qp9 is a usable password for the vault'}]}))
+        self.assertIn('[SECRET] is a usable password', out)
+        asked.clear()
+        with patch.object(basal, 'credential_probability', side_effect=lambda url, s, timeout=None: asked.append(s) or 0.05):
+            masked('table cells Kx7#Rz2Qp and Wq8#Lm3Zx here', confirm=basal.credential_checker({'basal_url': 'http://127.0.0.1:9'}))
+        self.assertEqual(len(asked), len(set(asked)))

@@ -3,7 +3,8 @@
 Local Scout never downloads, starts or configures the engine. The operator runs, for example,
 ``basal-serve --mode gguf --host 127.0.0.1 --port 8765 ...`` on the same machine and registers it with
 ``configure --basal-url http://127.0.0.1:8765``. Only loopback IP addresses are accepted and proxies are
-bypassed, so ticket text stays on the machine. Texts are masked before they are sent.
+bypassed, so text stays on the machine. Triage texts are masked before they are sent; the credential second
+opinion (``credential_probability``) sends the unmasked line around a candidate, because it has to see the value.
 
 basal answers a typed ``choice`` question with a probability for every allowed option. Local Scout adds an
 ``other`` option, refuses when ``other`` wins, and accepts the best label only above a threshold chosen on
