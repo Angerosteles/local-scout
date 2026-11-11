@@ -26,6 +26,8 @@ class FakeEngine(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        # Read the request first: answering with an unread body makes the close a TCP reset (flaky client errors).
+        raw = self.rfile.read(int(self.headers.get('Content-Length') or 0))
         if self.path.startswith('/redirect'):
             self.send_response(302)
             self.send_header('Location', 'http://198.51.100.7/escaped')
@@ -43,7 +45,7 @@ class FakeEngine(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+        body = json.loads(raw)
         FakeEngine.received.append(body)
         options = list(body['questions']['topic']['criteria'])
         text = body['state'].lower()

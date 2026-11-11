@@ -1,11 +1,17 @@
 """Copy-on-write protection for provider-bound user prompts and tool output."""
 from collections import OrderedDict
+from contextvars import ContextVar
 import hashlib
 import json
 import os
 
 from . import basal, credentials, privacy, storage
 from .tool_guard import MAX_INPUT_CHARS
+
+# One basal checker (one shared time budget) per provider request: every block and message of a request uses it.
+# _NO_BASAL marks paths that never ask the engine (auxiliary title calls).
+_REQUEST_CHECK = ContextVar('local_scout_request_basal_check', default=None)
+_NO_BASAL = object()
 
 ALERT = 'LOCAL_SCOUT_ALERT v1;'
 WITHHELD = ALERT + ' action=withheld; reason=prompt_scan_failed; source=user_prompt'
@@ -17,48 +23,67 @@ class PromptGuard:
         self.cache = OrderedDict()
         self.seen = OrderedDict()
 
-    def scan(self, text, names=False):
+    def scan(self, text, names=False, field=None):
         if len(text.encode('utf-8', 'surrogatepass')) > MAX_INPUT_CHARS:
             raise ValueError('oversize')
-        key = hashlib.sha256((('N' if names else '-') + text).encode('utf-8', 'surrogatepass')).digest()
-        if key not in self.cache:
-            # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
-            # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
-            check = basal.credential_checker(self.scout.profile()['config']) if names else None
-            context = credentials.CONTEXT.set(('prompt' if names else 'text', check))
-            try:
-                masked, categories = privacy.mask_local_details(text, names=names)
-            finally:
-                credentials.CONTEXT.reset(context)
-            self.cache[key] = (masked, tuple(sorted(categories)))
+        config = self.scout.profile()['config']
+        engine = config.get('basal_url') if names and isinstance(config, dict) else None
+        key = hashlib.sha256('\0'.join(('N' if names else '-', str(field or ''), str(engine or ''), text))
+                             .encode('utf-8', 'surrogatepass')).digest()
+        if key in self.cache:
+            return self.cache[key]
+        # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
+        # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
+        check = None
+        if engine:
+            shared = _REQUEST_CHECK.get()
+            check = None if shared is _NO_BASAL else (shared or basal.credential_checker(config))
+        state = {'degraded': False}
+        context = credentials.CONTEXT.set(('prompt' if names else 'text', check, state))
+        try:
+            masked, categories = privacy.mask_local_details(text, names=names, field=field)
+        finally:
+            credentials.CONTEXT.reset(context)
+        result = (masked, tuple(sorted(categories)))
+        if not state['degraded']:          # a scan cut short by a basal failure or budget is not remembered
+            self.cache[key] = result
             if len(self.cache) > 200:
                 self.cache.popitem(last=False)
-        return self.cache[key]
+        return result
 
     TEXT_TYPES = ('text', 'input_text', 'output_text')
 
-    def _leaves(self, value, found):
-        """Mask string leaves and string keys of a JSON-like value; other types are untouched.
+    def _leaves(self, value, found, field=None):
+        """Mask string leaves, numbers and string keys of a JSON-like value; booleans and null are untouched.
 
-        Keys are masked like values (as in tool results). If two keys become equal after masking, the later ones
-        get a deterministic suffix ([EMAIL]#2): the JSON stays valid and distinct, and no value leaks. Withholding is
-        not an option here, because these are tool-call arguments in the conversation history."""
+        A value is scanned with its key as context ("otp_code": "543918"), so password-like values, codes and PINs
+        are found as in plain text. Numbers are scanned as text and become a placeholder string only when something
+        is detected. Keys are masked like values (as in tool results). If two keys become equal after masking, the
+        later ones get a deterministic suffix ([EMAIL]#2): the JSON stays valid and distinct, and no value leaks.
+        Withholding is not an option here, because these are tool-call arguments in the conversation history."""
         if isinstance(value, str):
-            masked, cats = self.scan(value)
+            masked, cats = self.scan(value, field=field)
             found.update(cats)
             return masked
+        if isinstance(value, bool) or value is None:
+            return value
+        if isinstance(value, (int, float)):
+            masked, cats = self.scan(str(value), field=field)
+            found.update(cats)
+            return masked if cats else value
         if isinstance(value, dict):
             out = {}
             for key, child in value.items():
+                name = key if isinstance(key, str) else None
                 if isinstance(key, str):
                     key = self._leaves(key, found)
                     base, n = key, 2
                     while key in out:
                         key, n = f'{base}#{n}', n + 1
-                out[key] = self._leaves(child, found)
+                out[key] = self._leaves(child, found, name)
             return out
         if isinstance(value, list):
-            return [self._leaves(v, found) for v in value]
+            return [self._leaves(v, found, field) for v in value]
         return value
 
     def _arguments(self, raw, found):
@@ -122,6 +147,10 @@ class PromptGuard:
                         value, found = self.scan(inner)
                         categories.update(found)
                         new_content.append(dict(block, content=value) if found else block)
+                    elif isinstance(inner, list) and self._merge_split_text(inner) is not None:
+                        merged, merged_found = self._merge_split_text(inner)
+                        categories.update(merged_found)
+                        new_content.append(dict(block, content=merged))
                     elif isinstance(inner, list):
                         local = set()
                         blocks = [dict(b, text=self._leaves(b['text'], local)) if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES and isinstance(b.get('text'), str) else b for b in inner]
@@ -185,7 +214,11 @@ class PromptGuard:
             config = self.scout.profile()['config']
             if config.get('mode', 'off') == 'off' or 'profile' not in config.get('grants', {}).get('mask', []):
                 return None
-            return self.transform(request)
+            token = _REQUEST_CHECK.set(basal.credential_checker(config) or _NO_BASAL)
+            try:
+                return self.transform(request)
+            finally:
+                _REQUEST_CHECK.reset(token)
         except Exception:
             if os.environ.get('LOCAL_SCOUT_GUARD_MODE') == 'open':
                 return None
@@ -213,6 +246,7 @@ class PromptGuard:
                 return
         except Exception:
             config = None
+        token = _REQUEST_CHECK.set(_NO_BASAL)        # title calls never wait for the engine
         try:
             if not isinstance(request_messages, list):
                 return
@@ -231,6 +265,8 @@ class PromptGuard:
                         item['content'] = '[WITHHELD]'
         except Exception:
             return
+        finally:
+            _REQUEST_CHECK.reset(token)
 
     def _mask_arguments(self, item):
         """Mask tool-call arguments (chat tool_calls / function_call, Responses function_call items) as JSON."""
@@ -278,6 +314,20 @@ class PromptGuard:
             action = 'masked'
         return new, categories, action, source
 
+    def _merge_split_text(self, blocks):
+        """Text blocks whose detected data appears only when joined: return them merged into one masked block of the
+        first text type (other blocks kept after it) with the categories found; None when block-by-block masking
+        already covers everything."""
+        texts = [b['text'] for b in blocks if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES and isinstance(b.get('text'), str)]
+        if len(texts) < 2:
+            return None
+        joined, joined_found = self.scan(''.join(texts))
+        if joined == ''.join(self.scan(x)[0] for x in texts):
+            return None
+        kind = next(b.get('type') for b in blocks if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES)
+        rest = [b for b in blocks if not (isinstance(b, dict) and b.get('type') in self.TEXT_TYPES)]
+        return [{'type': kind, 'text': joined}] + rest, joined_found
+
     def _mask_top_level(self, result, request):
         """Top-level `system` (string or text blocks) and Responses `instructions` may carry user data (memory/profile)."""
         changed = False
@@ -288,6 +338,10 @@ class PromptGuard:
                 if cats:
                     result[key] = masked; changed = True
             elif isinstance(value, list) and all(isinstance(b, dict) for b in value):
+                merged = self._merge_split_text(value)
+                if merged is not None:            # detected data only across block boundaries: one masked block
+                    result[key], changed = merged[0], True
+                    continue
                 blocks, block_changed = [], False
                 for b in value:
                     if isinstance(b.get('text'), str):

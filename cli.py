@@ -125,7 +125,7 @@ def main(argv=None):
                           effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())
             if args.basal_url:
                 result['basal_notice'] = ('The engine is also asked about uncertain password-like values during masking: one line '
-                                          'at a time, unmasked, on loopback, at most 8 s per tool result or prompt. '
+                                          'at a time, unmasked, on loopback, at most 8 s per tool result or provider request. '
                                           'Remove it with --basal-url "".')
             print(json.dumps(result))
         elif args.command == 'status':

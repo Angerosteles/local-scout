@@ -183,4 +183,5 @@ def credential_checker(config, budget=None):
         if left <= 0.2:
             raise Unavailable('the time budget for the local basal engine is spent')
         return credential_probability(url, text, timeout=min(CREDENTIAL_TIMEOUT_SECONDS, left))
+    check.memo = {}      # answers per candidate, shared by every scan that uses this checker
     return check

@@ -269,3 +269,92 @@ class CredentialClient(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BughuntRegressions(unittest.TestCase):
+    """Findings of the final review (Sol and Terra, 11.11): each case leaked or broke before the fix."""
+    class Fake:
+        basal = None
+
+        def profile(self):
+            config = {'mode': 'report', 'grants': {'mask': ['profile']}}
+            if self.basal:
+                config['basal_url'] = self.basal
+            return {'config': config}
+
+    def guard(self, basal_url=None):
+        fake = self.Fake()
+        fake.basal = basal_url
+        return PromptGuard(fake)
+
+    def test_json_field_names_give_context_in_tool_results(self):
+        from plugin.scout import tool_guard
+        for raw, label in (('{"otp_code": "543918"}', '[CODE]'), ('{"otp_code": 543918}', '[CODE]'),
+                           ('{"password": "hunter2025"}', '[SECRET]'), ('{"pin": "4821"}', '[PIN]')):
+            with self.subTest(raw=raw):
+                out = tool_guard.transform(raw, 'tool_result', 'x')[0]
+                self.assertIn(label, out)
+                self.assertNotIn('543918', out); self.assertNotIn('hunter2025', out); self.assertNotIn('4821', out)
+
+    def test_tool_call_arguments_strings_and_numbers(self):
+        g = self.guard()
+        for args in ('{"otp_code": "543918"}', '{"otp_code": 543918}', '{"password": "hunter2025"}', '{"card": 4111111111111111}'):
+            with self.subTest(args=args):
+                req = {'messages': [{'role': 'assistant', 'content': None,
+                                     'tool_calls': [{'id': 't', 'type': 'function', 'function': {'name': 'f', 'arguments': args}}]}]}
+                out = json.dumps(g(req))
+                for raw in ('543918', 'hunter2025', '4111111111111111'):
+                    self.assertNotIn(raw, out)
+
+    def test_compact_json_without_spaces(self):
+        self.assertEqual(masked('{"pin":4821}'), '{"pin":[PIN]}')
+        self.assertEqual(masked('{"otp_code":543918}'), '{"otp_code":[CODE]}')
+
+    def test_split_text_blocks_in_top_level_system_and_tool_results(self):
+        g = self.guard()
+        split = [{'type': 'text', 'text': 'Contact: alice@'}, {'type': 'text', 'text': 'example.com'}]
+        out = json.dumps(g({'system': split, 'messages': [{'role': 'user', 'content': 'ok'}]}))
+        self.assertNotIn('alice@', out)
+        out = json.dumps(g({'messages': [{'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': 't', 'content': split}]}]}))
+        self.assertNotIn('alice@', out)
+
+    def test_one_basal_budget_per_request_and_no_cached_degraded_scan(self):
+        clock = [0.0]
+        calls = []
+
+        def slow(url, text, timeout=None):
+            calls.append(timeout)
+            clock[0] += timeout
+            return 0.95
+        blocks = [{'type': 'text', 'text': f'row {i} Kx7Rz2Qp{i}a here. '} for i in range(3)]
+        g = self.guard('http://127.0.0.1:9')
+        with patch.object(basal.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(basal, 'credential_probability', side_effect=slow):
+            result = g({'messages': [{'role': 'user', 'content': blocks}]})
+        self.assertLessEqual(clock[0], credentials.TIME_BUDGET + 0.01)
+        self.assertNotIn('WITHHELD', json.dumps(result))       # a spent budget does not withhold the prompt
+        # the degraded scans were not cached: with the engine back, the same text is checked again
+        with patch.object(basal, 'credential_probability', return_value=0.95) as ask:
+            self.assertIn('[SECRET]', g.scan('table cell Kx7Rz2Qp9 here', names=True)[0])
+            self.assertEqual(ask.call_count, 1)
+
+    def test_python_expressions_stay(self):
+        for line in ['key=lambda item: (item[0], -(item[1]-item[0])))',
+                     "digest = hashlib.sha256((prefix + text).encode('utf-8', 'surrogatepass'))",
+                     'total = (counts.get(key) or 0)+value']:
+            with self.subTest(line=line):
+                self.assertEqual(masked(line), line)
+
+    def test_setup_triage_copy_masks_passwords_codes_and_pins(self):
+        import tempfile
+        from pathlib import Path
+        from plugin.scout.setup_triage import prepare
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'h.jsonl'
+            rows = [dict(text=f'billing request {i}: Your PIN is 4821', label='billing', split='train' if i < 8 else 'validation') for i in range(12)]
+            rows += [dict(text=f'device request {i}: use IkXzYx33@$', label='technical', split='train' if i < 8 else 'validation') for i in range(12)]
+            path.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+            prepared = prepare(path)[0]
+        text = ' '.join(r['text'] for r in prepared)
+        self.assertNotIn('4821', text)
+        self.assertNotIn('IkXzYx33@$', text)

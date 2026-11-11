@@ -87,9 +87,9 @@ def _transform(value, source, event_id):
     marker_slot = "\x00LOCAL_SCOUT_MARKER_SLOT\x00"
     slot_used = False
 
-    def redact(text):
+    def redact(text, field=None):
         nonlocal slot_used
-        replacement, masked_categories = privacy.mask_local_details(text)
+        replacement, masked_categories = privacy.mask_local_details(text, field=field)
         if masked_categories:
             found.update(masked_categories)
         if _prompt_injection(text) or injection.is_injection(privacy._normalise_for_detection(text)[0]):
@@ -101,25 +101,25 @@ def _transform(value, source, event_id):
 
     try:
         if is_json:
-            def visit(item):
+            def visit(item, field=None):
                 if isinstance(item, str):
-                    return redact(item)
+                    return redact(item, field)
                 if isinstance(item, list):
-                    return [visit(child) for child in item]
+                    return [visit(child, field) for child in item]
                 if isinstance(item, dict):
                     result = {}
                     for key, child in item.items():
                         clean_key = redact(key)
                         if clean_key in result or clean_key == '_local_scout_alert':
                             raise ValueError("ambiguous JSON keys")
-                        result[clean_key] = visit(child)
+                        result[clean_key] = visit(child, key)   # the key gives context ("otp_code": "543918")
                     return result
                 if item is None or isinstance(item, bool):
                     return item
                 if isinstance(item, (int, float)):
                     # Numbers are scanned as text (e.g. a card number stored as a number); without a match they
                     # stay numbers, otherwise every read_file result (total_lines) would be withheld.
-                    masked_number = redact(str(item))
+                    masked_number = redact(str(item), field)
                     return masked_number if masked_number != str(item) else item
                 raise ValueError("unscanned JSON scalar")
 

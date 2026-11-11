@@ -23,6 +23,8 @@ import time
 from contextvars import ContextVar
 
 CONTEXT = ContextVar('local_scout_credential_context', default=None)
+# Name of the JSON field a value came from ("otp_code", "password"): detection sees "name: value", masks only the value.
+FIELD = ContextVar('local_scout_credential_field', default=None)
 
 # (low, high), chosen on the Gretel validation split and checked on TechQA and tool-call results (see docs/EVIDENCE.md).
 THRESHOLDS = {'prompt': (0.45, 0.55), 'text': (0.50, 0.60), 'terminal': (0.65, 0.75)}
@@ -41,7 +43,7 @@ ACTION = ('use', 'enter', 'sign', 'log', 'open', 'try')
 # Tokens stop at whitespace, quotes, angle brackets (XML tags) and JSON escapes (\\n, \\u00b0 …).
 _TOKEN = re.compile(r'(?:\\(?![nrtu"\\/])|[^\s"<>\\])+')
 _WORD = re.compile(r"[^\W\d_][\w]*", re.UNICODE)
-_LEAD = '\'"`([{<'
+_LEAD = '\'"`([{<:='
 _TRAIL = '\'"`.,;:}]'
 _WEAK_SYMBOLS = set("'-_./,")      # word punctuation; does not make a token password-like
 # Digits-only values, by their norms: one-time / 2FA codes are 6 or 8 digits (TOTP/HOTP, RFC 6238/4226; SMS codes
@@ -85,6 +87,7 @@ _EXCLUDE = [
     re.compile(r'^[\d\W_]+$'),                                          # digits and punctuation only
     re.compile(r'=$|\w\([^)]*=|^[~$]?\{\w|\(\?[:=!<]'),                   # open assignments, keyword calls, f-strings, regex groups
     re.compile(r'^~?\d+(?:\.\d+)?/[A-Za-z]+$'),                           # rates: ~6/sec
+    re.compile(r'(?:^|[^A-Za-z0-9_])[a-z][a-z0-9_]{2,}[\[(]|[a-z_]{2,}\.[a-z_]{2,}\(|^(?=.*[a-z_]{3,}).*[)\]][.\[(+\-*/,][A-Za-z_0-9(]'),  # code expressions: item[0], x).encode(, 0)+value
 ]
 # Code notation. Applied only to tokens with fewer than three distinct symbols: a call such as foo(bar1) has one or
 # two kinds, while a generated password packs many (#pt(1hy)hW_3BF+1N2).
@@ -336,6 +339,8 @@ def candidates(text):
         if text[start - 1:start] in ('"', "'") and _FIELD_NAME_END.match(text, end):
             continue
         value_start, _ = _split_assignment(text, start, end)
+        if value_start > start:            # "key:`value`": clean the value part as well
+            value_start, end = _clean(text, value_start, end)
         value = text[value_start:end]
         if line_starts is None:
             line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
@@ -378,10 +383,22 @@ def _best_token(text, lo, hi):
 
 
 def spans(text):
-    """Spans (start, end, 'secret') to mask, using the source and optional basal check from CONTEXT."""
+    """Spans (start, end, kind) to mask; a JSON field name from FIELD is used as context but never masked."""
+    field = FIELD.get()
+    if field:
+        probe = re.sub(r'[^A-Za-z0-9 _-]', ' ', field)[:64].replace('_', ' ') + ': '
+        n = len(probe)
+        return [(a - n, b - n, kind) for a, b, kind in _spans(probe + text) if a >= n]
+    return _spans(text)
+
+
+def _spans(text):
+    """Spans (start, end, kind) to mask, using the source and optional basal check from CONTEXT."""
     if len(text) < MIN_LEN - 2:
         return []
-    source, confirm = CONTEXT.get() or ('text', None)
+    context = CONTEXT.get() or ('text', None)
+    source, confirm = context[0], context[1]
+    state = context[2] if len(context) > 2 else None    # {'degraded': bool}: basal failed or ran out of budget
     low, high = THRESHOLDS.get(source, THRESHOLDS['text'])
     found = list(candidates(text))
     if not found:
@@ -396,21 +413,32 @@ def spans(text):
         starts.append(starts[-1] + len(item) + 1)
     budget = [MAX_CALLS]
     deadline = time.monotonic() + TIME_BUDGET
-    asked = {}
+    # Answers are remembered per candidate value for the whole request when the checker carries a memo (a message
+    # scanned as a whole and block by block then gets the same answers, even after the time budget is spent).
+    asked = getattr(confirm, 'memo', None)
+    if not isinstance(asked, dict):
+        asked = {}
 
-    def probability(segment):
+    def probability(segment, key=None):
         """Engine probability for one piece of text (cached); None when the budget is spent or it failed."""
-        if segment in asked:
-            return asked[segment]
-        if budget[0] <= 0 or time.monotonic() >= deadline or not segment.strip():
+        key = key or ('line', segment)
+        if key in asked:
+            return asked[key]
+        if not segment.strip():
+            return None
+        if budget[0] <= 0 or time.monotonic() >= deadline:
+            if state is not None:
+                state['degraded'] = True
             return None
         budget[0] -= 1
         try:
-            asked[segment] = confirm(segment)
+            asked[key] = confirm(segment)
         except Exception:
             budget[0] = 0      # engine failed: deterministic only for the rest of this text
-            asked[segment] = None
-        return asked[segment]
+            asked[key] = None
+            if state is not None:
+                state['degraded'] = True
+        return asked[key]
 
     def line_span(index):
         return starts[index], starts[index] + len(lines[index])
@@ -419,7 +447,7 @@ def spans(text):
     for a, b, line, kind in band:
         lo, hi = line_span(line)
         # The engine sees the candidate with up to WINDOW characters around it, never past its own line.
-        p = probability(text[max(lo, a - WINDOW):min(hi, b + WINDOW)])
+        p = probability(text[max(lo, a - WINDOW):min(hi, b + WINDOW)], ('value', text[a:b]))
         if p is not None and p >= CONFIRM_AT:
             result.append((a, b, kind))
             confirmed_lines.add(line)

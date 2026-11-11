@@ -174,9 +174,11 @@ def _normalise_for_detection(text):
     return (clean, index) if clean != text else (text, None)
 
 
-def mask_local_details(text, names=False):
-    """Mask detected PII. names=True adds the person-name detector (used for user prompts; see name_model)."""
+def mask_local_details(text, names=False, field=None):
+    """Mask detected PII. names=True adds the person-name detector (used for user prompts; see name_model).
+    field: name of the JSON field the text came from, used only as context for password-like values."""
     token = pii_model._CANDIDATE_BUDGET.set(pii_model.MASK_CANDIDATE_LIMIT)
+    field_token = credentials.FIELD.set(field if isinstance(field, str) and field else None)
     try:
         # zero-width characters, full-width forms and Unicode hyphens hid e-mails,
         # cards and phones from every detector. Detect on a normalised copy, then map spans back to the original.
@@ -191,6 +193,7 @@ def mask_local_details(text, names=False):
         matches = sorted(found, key=lambda item: (item[0], -(item[1]-item[0])))
     finally:
         pii_model._CANDIDATE_BUDGET.reset(token)
+        credentials.FIELD.reset(field_token)
     # overlapping spans of different categories are UNITED, never
     # dropped — skipping a later overlapping span leaked the rest of an e-mail, card or secret. The region is
     # labelled with its longest span's category; every category in it is reported.

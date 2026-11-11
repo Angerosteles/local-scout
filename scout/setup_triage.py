@@ -39,8 +39,9 @@ def prepare(path):
                     raise SetupError(f'Line {number}: provide a label using up to 64 letters, digits, _ : . or -.')
                 # real support histories contain phone numbers/e-mails; mask locally instead of
                 # rejecting the whole file (the stored copy and the model never see the raw values).
-                if privacy.categories(row['text']):
-                    masked_text, _ = privacy.mask_local_details(row['text'])
+                # The full mask (including password-like values, codes and PINs), not only the regex categories.
+                masked_text, masked_categories = privacy.mask_local_details(row['text'])
+                if masked_categories:
                     row = dict(row, text=masked_text)
                     masked_rows += 1
                 if 'split' in row and row['split'] not in ('train', 'validation'):
