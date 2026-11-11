@@ -167,6 +167,16 @@ class PromptGuardRegressionTests(unittest.TestCase):
         new = self.guard(request={'messages': blocks}, api_mode='anthropic_messages')['request']['messages'][0]['content'][0]['input']
         self.assertEqual(new, {'[EMAIL]': 'hi'})
 
+    def test_split_blocks_keep_system_prompts_and_withhold_user_content(self):
+        blocks = [{'type': 'text', 'text': 'Escalations go to jane.roe@exa'}, {'type': 'text', 'text': 'mple.com. Be brief.'}]
+        out = self.guard(request={'messages': [{'role': 'system', 'content': list(blocks)}, {'role': 'user', 'content': list(blocks)}]},
+                         api_mode='chat_completions')['request']['messages']
+        self.assertEqual(len(out[0]['content']), 1)
+        self.assertIn('[EMAIL]', out[0]['content'][0]['text'])
+        self.assertIn('Be brief.', out[0]['content'][0]['text'])
+        self.assertNotIn('jane.roe', str(out))
+        self.assertIn('action=withheld', str(out[1]['content']))
+
     def test_auxiliary_parity(self):
         msgs = [{'role': 'assistant', 'content': None, 'tool_calls': [{'id': 'c', 'type': 'function', 'function': {'name': 's', 'arguments': '{"to":"jane.roe@example.com"}'}}]},
                 {'role': 'developer', 'content': 'mail a@example.com'}]

@@ -91,8 +91,14 @@ class PromptGuard:
             if sum(len(x.encode('utf-8', 'surrogatepass')) for x in texts) > MAX_INPUT_CHARS:
                 raise ValueError('oversize')
             if len(texts) > 1:
-                joined, _ = self.scan(''.join(texts), names)
+                joined, joined_found = self.scan(''.join(texts), names)
                 if joined != ''.join(self.scan(x, names)[0] for x in texts):
+                    if item.get('role') in ('system', 'developer'):
+                        # Detected data only appears across block boundaries. Never strip the agent's instructions:
+                        # merge the text blocks into one masked block of the same type and keep the other blocks.
+                        kind = next(b.get('type') for b in content if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES)
+                        rest = [b for b in content if not (isinstance(b, dict) and b.get('type') in self.TEXT_TYPES)]
+                        return dict(item, **{content_key: [{'type': kind, 'text': joined}] + rest}), tuple(sorted(joined_found)), 'masked'
                     return dict(item, **{content_key: '[WITHHELD]' if source == 'auxiliary_call' else WITHHELD}), (), 'withheld'
             categories, new_content = set(), []
             for block in content:

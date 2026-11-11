@@ -5,7 +5,7 @@ import json
 import math
 import sys
 
-from . import privacy
+from . import privacy, storage
 from .core import ID, LABEL_ID, ScoutError
 
 class SetupError(ValueError):
@@ -117,11 +117,11 @@ def run(scout, args):
             if previous_settings is None:
                 settings.unlink(missing_ok=True)
             else:
-                settings.write_bytes(previous_settings)
+                storage.atomic(settings, previous_settings)
             if previous_source is None:
                 source.unlink(missing_ok=True)
             else:
-                source.write_bytes(previous_source)
+                storage.atomic(source, previous_source)
             scout.profiles.pop(str(scout.root()), None)
         except Exception:
             pass
@@ -129,8 +129,7 @@ def run(scout, args):
 
 
 def _apply(scout, args, rows, automatic, classes, masked_rows, source, previous_grants):
-    source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text(''.join(json.dumps(r, ensure_ascii=False)+'\n' for r in rows), encoding='utf-8')
+    storage.atomic(source, ''.join(json.dumps(r, ensure_ascii=False)+'\n' for r in rows).encode('utf-8'))
     grants = {scope: list(datasets) for scope, datasets in previous_grants.items() if isinstance(datasets, list)}
     for scope in ('observe','report','train','insights','answer'):
         if args.dataset not in grants.setdefault(scope, []):

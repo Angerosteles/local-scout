@@ -18,12 +18,21 @@ def digest(data):
     return hashlib.sha256(data).hexdigest().translate(str.maketrans('0123456789abcdef', 'abcdefghijklmnop'))
 
 
+def private_dir(path):
+    """Create the directory if needed and make it private (0700); parents created by Hermes are left alone."""
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    os.chmod(path, 0o700)
+    return path
+
+
 def atomic(path, data):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_dir(path.parent)
     temp = path.with_name('.' + uuid.uuid4().hex + '.pending')
     try:
-        with temp.open('xb') as stream:
+        # 0600 from creation: local state can hold masked text, model vocabulary or usage counters.
+        with os.fdopen(os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), 'wb') as stream:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())

@@ -2,6 +2,21 @@
 
 Part of the [Local Scout README](../README.md).
 
+## Running the operator CLI
+
+After `hermes plugins install`, the code is in `~/.hermes/plugins/local-scout` and its Python dependencies are in the environment Hermes builds for plugins (`~/.hermes/installs/<id>/environments/<generation>/venv` in Hermes 0.23). The CLI runs as the package `plugin`:
+
+```sh
+mkdir -p ~/.local/share/local-scout && ln -sfn ~/.hermes/plugins/local-scout ~/.local/share/local-scout/plugin
+cd ~/.local/share/local-scout
+for v in $(ls -td ~/.hermes/installs/*/environments/*/venv); do
+  "$v/bin/python" -c "import numpy, sklearn" 2>/dev/null && PY="$v/bin/python" && break
+done
+"$PY" -m plugin.cli --home ~/.hermes status
+```
+
+The loop picks the newest plugin environment that actually has the dependencies. For another Hermes profile, use that profile's home instead of `~/.hermes`. Linux and macOS only.
+
 ## Setup-triage in detail
 
 Prepare a UTF-8 JSONL file with one object per line, for example `{"text":"Please help with my invoice","label":"billing"}`. Use at least 20 examples and two classes, with multiple training examples per class. Do not include personal information. You may specify `"split":"train"` or `"split":"validation"` on every line; `test` is rejected. If omitted, a deterministic text-hash split assigns about 80% to training and 20% to validation. Duplicate texts stay together. Make sure the resulting validation set has at least five examples.
@@ -143,7 +158,7 @@ Local summaries and HTML views show operational metadata, alerts and available u
 
 ## Requirements and interface
 
-Hermes >=0.23.0,<0.24.0 and Python >=3.11,<3.15 are required. Base dependencies are NumPy, SciPy, scikit-learn, PyYAML and threadpoolctl; the optional CNN recipe needs PyTorch, and the optional basal method needs a basal engine that you install and run locally ([rkinas/basal](https://github.com/rkinas/basal)). The scientific stack is substantial: roughly 200 MB or more depending on platform and installation; measure the target environment before deployment. Model weights are separate.
+Hermes >=0.23.0,<0.24.0 and Python >=3.11,<3.15 are required, on Linux or macOS (file locking uses `fcntl`; Windows is not supported). Base dependencies are NumPy, SciPy, scikit-learn, PyYAML and threadpoolctl; the optional CNN recipe needs PyTorch, and the optional basal method needs a basal engine that you install and run locally ([rkinas/basal](https://github.com/rkinas/basal)). The scientific stack is substantial: roughly 200 MB or more depending on platform and installation; measure the target environment before deployment. Model weights are separate.
 
 The manifest declares 9 tools: `scout_handle`, `scout_calibrate`, `scout_inspect`, `scout_recipes`, `scout_choose`, `scout_train`, `scout_predict`, `scout_report`, `scout_calculate`. Make one Scout tool call at a time. The 8 hooks are `post_tool_call`, `pre_api_request`, `pre_auxiliary_call`, `post_api_request`, `post_auxiliary_call`, `transform_llm_output`, `transform_tool_result`, and `transform_terminal_output`.
 

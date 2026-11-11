@@ -35,8 +35,7 @@ def _safe_read(path, default):
 
 def append_event(root, event):
     """Append one allowlisted metadata event and keep a bounded rotating journal."""
-    root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
+    root = storage.private_dir(root)
     clean = {k: event[k] for k in ('ts', 'kind', 'tool', 'ok', 'code', 'duration_ms', 'response_bytes', 'input_tokens', 'output_tokens') if k in event}
     if event.get('kind') == 'local_answer':
         clean = {k: event[k] for k in ('ts', 'kind', 'answered', 'forwarded', 'reason',
@@ -63,7 +62,7 @@ def append_event(root, event):
             rotated.unlink(missing_ok=True)
             if path.exists():
                 os.replace(path, rotated)
-        with path.open('ab') as stream:
+        with os.fdopen(os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), 'ab') as stream:
             stream.write(data)
             stream.flush()
     except OSError:
