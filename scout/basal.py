@@ -1,0 +1,132 @@
+"""Optional client for a local basal engine (basal-serve by Remigiusz Kinas, Apache-2.0).
+
+Local Scout never downloads, starts or configures the engine. The operator runs, for example,
+``basal-serve --mode gguf --host 127.0.0.1 --port 8765 ...`` on the same machine and registers it with
+``configure --basal-url http://127.0.0.1:8765``. Only loopback IP addresses are accepted and proxies are
+bypassed, so ticket text stays on the machine. Texts are masked before they are sent.
+
+basal answers a typed ``choice`` question with a probability for every allowed option. Local Scout adds an
+``other`` option, refuses when ``other`` wins, and accepts the best label only above a threshold chosen on
+validation data, exactly like its other triage methods (``learning.train``). The refusal option has a
+reserved id (``none_of_these``), so a user class called ``other`` keeps its meaning. Redirects are refused
+(a local server must not be able to forward text elsewhere) and answers are size-limited.
+"""
+import ipaddress
+import json
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+OTHER = 'none_of_these'  # reserved refusal option; a dataset class with this id is rejected
+OTHER_DESCRIPTION = 'none of the listed topics'
+MAX_RESPONSE_BYTES = 1 << 20
+QUESTION = 'Which topic is this customer message about?'
+TIMEOUT_SECONDS = 120
+MAX_DESCRIPTION = 200
+SAFE_LABEL = re.compile(r'^[a-z0-9_:.-]{1,64}$')
+# A freshly started engine can answer 503 for a moment after it reports ready.
+RETRY_STATUS = {503}
+RETRIES = 3
+
+
+class Unavailable(Exception):
+    """The configured engine did not answer with a usable decision."""
+
+
+class ReservedLabel(ValueError):
+    """A dataset class uses the id reserved for the refusal option."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise Unavailable(f'the local basal engine answered with a redirect (HTTP {code}); redirects are refused')
+
+
+def check_url(url):
+    """Return the normalised base URL, or raise ValueError unless it is http://<loopback IP>:<port>."""
+    if not isinstance(url, str) or len(url) > 100:
+        raise ValueError('basal_url must be http://127.0.0.1:<port>')
+    parts = urllib.parse.urlsplit(url.strip())
+    if (parts.scheme != 'http' or parts.username or parts.password or parts.query or parts.fragment
+            or parts.path not in ('', '/')):
+        raise ValueError('basal_url must be http://127.0.0.1:<port>')
+    try:
+        loopback = ipaddress.ip_address(parts.hostname or '').is_loopback
+        port = parts.port
+    except ValueError:
+        loopback, port = False, None
+    if not loopback or not port:
+        raise ValueError('basal_url must be a loopback IP address with a port, e.g. http://127.0.0.1:8765')
+    host = f'[{parts.hostname}]' if ':' in parts.hostname else parts.hostname
+    return f'http://{host}:{port}'
+
+
+def check_descriptions(descriptions):
+    """Validate optional one-line category descriptions {label: text}; returns a clean dict."""
+    if descriptions is None:
+        return {}
+    if not isinstance(descriptions, dict) or len(descriptions) > 256:
+        raise ValueError('descriptions must map up to 256 labels to text')
+    clean = {}
+    for label, text in descriptions.items():
+        if (not isinstance(label, str) or not SAFE_LABEL.fullmatch(label) or label == OTHER
+                or not isinstance(text, str) or not 1 <= len(text.strip()) <= MAX_DESCRIPTION):
+            raise ValueError('each description needs a label id and 1-200 characters of text')
+        clean[label] = ' '.join(text.split())
+    return clean
+
+
+def criteria(classes, descriptions=None):
+    """Allowed answers for basal: one entry per label plus ``other``."""
+    descriptions = descriptions or {}
+    out = {label: descriptions.get(label) or label.replace('_', ' ') for label in classes}
+    out[OTHER] = OTHER_DESCRIPTION
+    return out
+
+
+def _ask(base, body):
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    request = urllib.request.Request(base + '/v1/systemone', data=json.dumps(body).encode(),
+                                     headers={'content-type': 'application/json'})
+    for attempt in range(RETRIES):
+        try:
+            with opener.open(request, timeout=TIMEOUT_SECONDS) as response:
+                data = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(data) > MAX_RESPONSE_BYTES:
+                raise Unavailable('the local basal engine answer is larger than 1 MB')
+            return json.loads(data)
+        except Unavailable:
+            raise
+        except urllib.error.HTTPError as exc:
+            if exc.code not in RETRY_STATUS or attempt == RETRIES - 1:
+                raise Unavailable(f'the local basal engine answered HTTP {exc.code}') from None
+        except (OSError, ValueError) as exc:
+            raise Unavailable('the local basal engine did not answer') from exc
+        time.sleep(1)
+    raise Unavailable('the local basal engine did not answer')
+
+
+def decide(url, texts, classes, descriptions=None):
+    """Return one ``(label_index or None, probability)`` per text.
+
+    ``None`` means ``other`` (or no listed label) had the highest probability: the caller must refuse."""
+    base = check_url(url)
+    allowed = criteria(classes, descriptions)
+    results = []
+    for text in texts:
+        body = {'state': text, 'questions': {'topic': {'type': 'choice', 'criteria': allowed, 'instructions': QUESTION}}}
+        answer = _ask(base, body)
+        try:
+            probabilities = answer['answers']['topic']['probabilities']
+            # Every allowed option must be present: a missing one is not a zero.
+            scores = [float(probabilities[label]) for label in classes]
+            other = float(probabilities[OTHER])
+        except (KeyError, TypeError, ValueError, AttributeError):
+            raise Unavailable('the local basal engine returned an incomplete or unexpected answer') from None
+        if any(not 0.0 <= s <= 1.0 for s in scores + [other]):
+            raise Unavailable('the local basal engine returned probabilities outside [0, 1]')
+        best = max(range(len(scores)), key=scores.__getitem__)
+        results.append((None if other >= scores[best] else best, scores[best]))
+    return results

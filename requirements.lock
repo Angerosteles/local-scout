@@ -1,0 +1,8 @@
+# Supplied offline environment; no installation was performed.
+# Supplied offline environment; no installation was performed.
+numpy==2.5.4
+scipy==1.18.1
+scikit-learn==1.9.1
+PyYAML==6.0.3
+joblib==1.6.0
+threadpoolctl==3.8.0

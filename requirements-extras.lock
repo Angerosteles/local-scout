@@ -1,0 +1,2 @@
+# Optional extra (CNN recipe), the version used in our tests.
+torch==2.15.0+cpu

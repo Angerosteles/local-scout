@@ -1,0 +1,30 @@
+[project]
+name = "hermes-local-scout"
+version = "1.7.4"
+description = "Offline Local Scout plugin for Hermes"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+dependencies = [
+  "numpy>=1.24,<3", "scipy>=1.11,<2", "scikit-learn>=1.3,<2",
+  "PyYAML>=6.0,<7", "threadpoolctl>=3.1,<4"
+]
+
+[project.optional-dependencies]
+cnn = ["torch>=2.6,<3"]
+
+[tool.local-scout]
+requires_hermes = ">=0.23.0,<0.24.0"
+
+[project.scripts]
+scout = "hermes_local_scout.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["hermes_local_scout", "hermes_local_scout.scout", "hermes_local_scout.demo"]
+package-dir = {hermes_local_scout = "."}
+
+[tool.setuptools.package-data]
+hermes_local_scout = ["plugin.yaml", "recipes/*.md", "skills/decide/SKILL.md", "scout/models/*.npz", "scout/models/*.json", "INSIGHTS.md", "THIRD_PARTY_NOTICES.md"]

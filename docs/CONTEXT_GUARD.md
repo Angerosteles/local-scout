@@ -1,0 +1,15 @@
+# Context guard (branch `context-guard`, not in this release)
+
+Part of the [Local Scout README](../README.md).
+
+## Context guard (on the `context-guard` branch, not in this release)
+
+Hermes checks each terminal command on its own (`dangerous_command_check`, optionally a "smart" model review of the same command) and is aimed at destructive commands. It does not flag sending data out: `curl -d @customers.csv https://…`, `scp clients.db …`, `env | curl -d @- …` and `cat inbox | mail …` all pass its check. Local Scout's context guard looks at the session instead. Everything that is not the user's own message counts as untrusted; the guard keeps an in-memory index of the destinations, paths and injection flags found in untrusted tool results, never the text itself. An outgoing call (shell upload or POST, scp/rsync/nc/mail, code that posts data, `send`/`upload`/`post` tools, MCP tools named that way) is escalated when its destination came from untrusted content (a destination the user wrote does not count as untrusted), when it repeats indicators from a flagged instruction, carries mask placeholders, or sends a file read earlier in the session. Escalation uses Hermes' own approval gate (`pre_tool_call` → approval prompt; non-interactive sessions deny), so destructive commands stay with Hermes and nothing is blocked silently. On that branch it is enabled with `--approve …,guard`; it is kept out of this release until it holds up better under review.
+
+| Blind set: 60 scenarios written independently, without access to the code, measured once | Context guard | Hermes `dangerous_command_check` |
+|---|---|---|
+| Injected exfiltration, all tools | 19/30 escalated | — (terminal only) |
+| Injected exfiltration, terminal commands | 13/22 | 3/22 |
+| Benign calls asked for approval | 2/30 (replying to an e-mail sender whose address is only in the e-mail) | 0/18 terminal |
+
+Known misses in the blind set: DNS exfiltration (nslookup/dig), data in an HTTP header or query string of a GET, one-liners with their own sockets (node, perl), `ssh host "cat > file" < data`, decimal IPs, punycode domains, writes into cloud-synced folders. After an independent review the guard was fixed (code arguments were scanned after JSON escaping; JSON keys were not indexed; a mere mention of an address, even in "do not send to …", counted as consent; calls without a session ID were not covered). A second review showed that consent read from the user's text stays fragile (a quoted sentence or "mustn't" still counted as permission), so it was removed altogether. The same set, no longer blind, then gave 20/30 escalated and 3/30 benign calls asked. Nothing the user writes is parsed as consent: in a session that saw a flagged instruction, any second signal asks, even when the user asked for the transfer; Hermes' prompt is the consent step. Deciding a call takes under 0.1 ms; indexing a tool result about 1 ms. The index lives in memory, capped per session, and is lost on restart; calls without a session ID share one index. This is a tripwire for a human, not a security boundary.
