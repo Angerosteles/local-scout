@@ -104,7 +104,7 @@ class Scout:
             if answer_marker is not None:
                 config['answer_marker'] = answer_marker
             if grants is not None:
-                if set(grants)-{'observe', 'report', 'train', 'mask', 'insights', 'answer'} or any(not isinstance(v,list) or any(not ID.fullmatch(s) for s in v) for v in grants.values()):
+                if set(grants)-{'observe', 'report', 'train', 'mask', 'insights', 'answer', 'guard'} or any(not isinstance(v,list) or any(not ID.fullmatch(s) for s in v) for v in grants.values()):
                     raise ValueError
                 config['grants'] = grants
             if sources is not None:

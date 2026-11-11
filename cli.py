@@ -18,7 +18,7 @@ def main(argv=None):
     conf.add_argument('--dataset', default='demo_a')
     conf.add_argument('--source', type=Path)
     conf.add_argument('--synthetic-pii', action='store_true', help='Mask locally detected PII in this explicitly synthetic dataset')
-    conf.add_argument('--approve', default=None, help='Explicit comma-separated observe,report,train,mask,insights,answer; scope@dataset targets another dataset (e.g. mask@profile); absent preserves grants')
+    conf.add_argument('--approve', default=None, help='Explicit comma-separated observe,report,train,mask,insights,answer,guard; scope@dataset targets another dataset (e.g. mask@profile); absent preserves grants')
     conf.add_argument('--answer-task', choices=['triage'], default=None)
     conf.add_argument('--answer-marker', default=None)
     conf.add_argument('--basal-url', default=None, help='Local basal engine, e.g. http://127.0.0.1:8765 (loopback only); empty string removes it')

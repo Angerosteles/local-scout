@@ -15,6 +15,7 @@ provides_tools:
   - scout_report
   - scout_calculate
 provides_hooks:
+  - pre_tool_call
   - post_tool_call
   - pre_api_request
   - pre_auxiliary_call
