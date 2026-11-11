@@ -140,7 +140,7 @@ CREDENTIAL_CRITERIA = {
 CREDENTIAL_TIMEOUT_SECONDS = 8
 
 
-def credential_probability(url, text):
+def credential_probability(url, text, timeout=CREDENTIAL_TIMEOUT_SECONDS):
     """Probability that one line holds a usable credential (masking second opinion; one try, short timeout).
 
     Raises ``Unavailable`` on any failure; the caller then falls back to its deterministic threshold."""
@@ -151,7 +151,7 @@ def credential_probability(url, text):
     request = urllib.request.Request(base + '/v1/systemone', data=json.dumps(body).encode(),
                                      headers={'content-type': 'application/json'})
     try:
-        with opener.open(request, timeout=CREDENTIAL_TIMEOUT_SECONDS) as response:
+        with opener.open(request, timeout=timeout) as response:
             data = response.read(MAX_RESPONSE_BYTES + 1)
         if len(data) > MAX_RESPONSE_BYTES:
             raise Unavailable('the local basal engine answer is larger than 1 MB')
@@ -165,7 +165,22 @@ def credential_probability(url, text):
     return value
 
 
-def credential_checker(config):
-    """Second opinion for uncertain password-like values from the registered local basal engine, or None."""
+def credential_checker(config, budget=None):
+    """Second opinion for uncertain password-like values from the registered local basal engine, or None.
+
+    One checker serves one tool result or prompt (every text field in it): calls share one deadline, and each call's
+    timeout is cut to the time left, so the whole check stays within ``budget`` seconds (default: the credentials
+    TIME_BUDGET) plus connection overhead. Past the deadline it raises ``Unavailable``; the caller then keeps its
+    deterministic threshold."""
     url = config.get('basal_url') if isinstance(config, dict) else None
-    return (lambda line: credential_probability(url, line)) if url else None
+    if not url:
+        return None
+    from . import credentials
+    deadline = time.monotonic() + (credentials.TIME_BUDGET if budget is None else budget)
+
+    def check(text):
+        left = deadline - time.monotonic()
+        if left <= 0.2:
+            raise Unavailable('the time budget for the local basal engine is spent')
+        return credential_probability(url, text, timeout=min(CREDENTIAL_TIMEOUT_SECONDS, left))
+    return check

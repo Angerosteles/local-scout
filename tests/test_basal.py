@@ -107,6 +107,13 @@ class Basal(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return self.cli('setup-triage', '--history', str(self.history), '--recipe', 'basal_zero_shot', '--yes', '--json', *extra)
 
+    def test_configure_says_the_engine_also_checks_passwords(self):
+        code, out, err = self.cli('configure', '--mode', 'report', '--basal-url', self.url)
+        self.assertEqual(code, 0, err)
+        self.assertIn('password-like', json.loads(out)['basal_notice'])
+        code, out, err = self.cli('configure', '--mode', 'report')
+        self.assertNotIn('basal_notice', json.loads(out))
+
     def test_only_loopback_ip_addresses_are_accepted(self):
         self.assertEqual(basal.check_url('http://127.0.0.1:8765/'), 'http://127.0.0.1:8765')
         self.assertEqual(basal.check_url('http://[::1]:8765'), 'http://[::1]:8765')

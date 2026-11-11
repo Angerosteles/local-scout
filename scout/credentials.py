@@ -29,7 +29,7 @@ THRESHOLDS = {'prompt': (0.45, 0.55), 'text': (0.50, 0.60), 'terminal': (0.65, 0
 CONFIRM_AT = 0.5        # basal probability that confirms a line
 NEIGHBOURS = 1          # lines above and below asked after a confirmed or masked line
 MAX_CALLS = 6           # basal calls per text; then deterministic only
-TIME_BUDGET = 8.0       # seconds of basal calls per text; then deterministic only
+TIME_BUDGET = 8.0       # seconds of basal calls per tool result or prompt (shared deadline, see basal.credential_checker)
 WINDOW = 300            # characters of context around a candidate sent to the engine
 MIN_LEN, MAX_LEN = 6, 20
 

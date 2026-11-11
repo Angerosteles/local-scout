@@ -78,7 +78,9 @@ class Menu(unittest.TestCase):
         self.assertIn('local triage: on', menu.describe(self.scout))
 
     def test_off_and_mode(self):
-        self.drive('1', 'y', '3', '1', 'q')
+        self.drive('1', 'y', '3', '1', 'n', 'q')            # mode change needs a yes
+        self.assertEqual(self.config()['mode'], 'report')
+        self.drive('1', 'y', '3', '1', 'y', 'q')
         self.assertEqual(self.config()['mode'], 'background')
         self.drive('3', '9', 'q')
         self.assertEqual(self.config()['mode'], 'background')

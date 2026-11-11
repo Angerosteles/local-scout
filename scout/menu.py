@@ -60,7 +60,7 @@ def choose_mode(scout, ask, say):
     for key, (mode, text) in MODES.items():
         say(f'  {key}) {mode:<10} {text}')
     picked = MODES.get(ask('Mode: ').strip())
-    if picked:
+    if picked and _yes(ask, f'Switch to {picked[0]}?'):
         scout.configure_local(picked[0])
         say(f'Mode set to {picked[0]}. Same as: scout configure --mode {picked[0]}')
 

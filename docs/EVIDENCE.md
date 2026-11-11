@@ -96,7 +96,7 @@ Password-like values without a known key format are scored by shape (character c
 
 Digits-only values follow their norms: one-time and 2FA codes are 6 or 8 digits (TOTP/HOTP, RFC 6238/4226; SMS codes 4–8) and become `[CODE]` next to `verification`, `OTP`, `2FA`, `authenticator` … (or `login`, `security`, `SMS` … together with "code"); PINs are 4–6 digits after "PIN" and become `[PIN]`. A bare "code" is uncertain and left to the basal check; customs (HS), postal, error, status, promo, SKU and similar codes are never masked.
 
-Thresholds (low, high) were chosen on the Gretel validation split: text and tool results 0.50/0.60, user prompts 0.45/0.55, terminal output 0.65/0.75. A score at or above high is masked; a score in the band is masked only when a registered basal engine confirms it (P ≥ 0.5, the candidate with up to 300 characters around it), and then the line above and below are asked too. At most 6 engine calls and 8 s per text; on failure or after the budget, only high applies.
+Thresholds (low, high) were chosen on the Gretel validation split: text and tool results 0.50/0.60, user prompts 0.45/0.55, terminal output 0.65/0.75. A score at or above high is masked; a score in the band is masked only when a registered basal engine confirms it (P ≥ 0.5, the candidate with up to 300 characters around it), and then the line above and below are asked too. At most 6 engine calls per text field and 8 s in total per tool result or prompt (each call's timeout is cut to the time left); on failure or after the budget, only high applies.
 
 | Gretel test (not used for tuning) | Passwords | PINs | Tokens masked outside labelled entities |
 |---|---|---|---|
@@ -108,7 +108,7 @@ Negatives at the text threshold: TechQA 0 masked tokens in 1,506 texts; tool-cal
 
 ### Telemetry / Insights
 
-Local views summarize tool operations, error codes, timing, PII alert categories, choices, training, handling, abstentions and observed token usage when available. Prompt masks are separated by source and injection alerts are counted separately. Missing usage is displayed as not observed with its mode or consent reason. Preview and export are explicit, local operations; see [INSIGHTS.md](INSIGHTS.md) for consent, scope and exclusions.
+Local views summarize tool operations, error codes, timing, PII alert categories, choices, training, handling, abstentions and observed token usage when available. Prompt masks are separated by source and injection alerts are counted separately. Missing usage is displayed as not observed with its mode or consent reason. Preview and export are explicit, local operations; see [INSIGHTS.md](../INSIGHTS.md) for consent, scope and exclusions.
 
 ### Measured savings
 
@@ -134,7 +134,7 @@ On these 20 messages Scout answered 4 locally (all correct) and forwarded 16, so
 | Injection full-hook p95, 100k characters | 57.043 ms | One synthetic input, earlier threshold; not a worst-case bound |
 | Harness (offline) | 28 PASS / 0 FAIL / 5 BLOCKED per seed | Four seeds; the five lifecycle cases need a running Hermes |
 | Harness + live Hermes 0.23 | 33 PASS / 0 FAIL / 0 BLOCKED per seed | Lifecycle cases T01 off/no state, T18 restart (private and public `scout_predict`), T22 report after the third event, T27 three clean profiles, T28 off/delete run in the official Hermes 0.23 image through Hermes' plugin loader, tool dispatcher and hook dispatcher, once per seed fixture; evidence is accepted only for the same plugin file tree (SHA-256 of all files), the same fixture, the matching step and Hermes 0.23 (`integ/`, mission tooling). No model calls; notifications are checked in state, not delivery to a chat UI |
-| Unit tests | 274 OK; without a Hermes source tree the Hermes contract tests skip, and 4 converter tests need dataset tooling that is not shipped | 1.7.4 |
+| Unit tests | 276 OK; without a Hermes source tree the Hermes contract tests skip, and 4 converter tests need dataset tooling that is not shipped | 1.7.4 |
 | Live Hermes | Validation passed (`--install-deps`, clean profile); prompt mask incl. names and the title channel, local answer with 0 main-call tokens, tool-result mask and alert observed | Synthetic fixtures, one provider (Nous) for live chat checks |
 
 Speed on a laptop CPU (AMD Ryzen 7 PRO 5850U, one thread, no GPU): local classification median 21 ms (p95 26 ms, 40 calls) after a 0.6 s cold start; masking a 331-character e-mail with name detection median 0.9 ms (0.85 ms with password-like detection, 0.73 ms before it). In the recorded demo runs the remote model took 6–11 s per triage turn (OpenRouter free tier; not a provider benchmark).
@@ -143,4 +143,4 @@ Measurements are from different test configurations and are not an end-to-end la
 
 ## Datasets and licenses
 
-The detector evaluations and training use Gretel synthetic PII, AdvPIIBench, deepset prompt-injections, Lakera Gandalf Ignore Instructions, CLINC150, BANKING77 and TechQA; the Hermes function-calling dataset only for a password false-positive count. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attribution, licenses and distribution caveats. Local Scout is MIT licensed; see [LICENSE](LICENSE).
+The detector evaluations and training use Gretel synthetic PII, AdvPIIBench, deepset prompt-injections, Lakera Gandalf Ignore Instructions, CLINC150, BANKING77 and TechQA; the Hermes function-calling dataset only for a password false-positive count. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for attribution, licenses and distribution caveats. Local Scout is MIT licensed; see [LICENSE](../LICENSE).

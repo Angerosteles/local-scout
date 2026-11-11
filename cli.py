@@ -121,8 +121,13 @@ def main(argv=None):
             scout.configure_local(args.mode, grants=grants, sources={args.dataset:args.source} if args.source else None,
                                   synthetic_pii=args.synthetic_pii, answer_task=args.answer_task,
                                   answer_marker=args.answer_marker, basal_url=args.basal_url, basal_descriptions=descriptions)
-            print(json.dumps(dict(status='CONFIGURED', mode=args.mode,
-                                  effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())))
+            result = dict(status='CONFIGURED', mode=args.mode,
+                          effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())
+            if args.basal_url:
+                result['basal_notice'] = ('The engine is also asked about uncertain password-like values during masking: one line '
+                                          'at a time, unmasked, on loopback, at most 8 s per tool result or prompt. '
+                                          'Remove it with --basal-url "".')
+            print(json.dumps(result))
         elif args.command == 'status':
             config=scout.profile()['config']
             decisions_path = scout.root()/'decisions.json'

@@ -246,6 +246,22 @@ class CredentialClient(unittest.TestCase):
         with self.assertRaises(basal.Unavailable):
             basal.credential_probability('http://127.0.0.1:9', 'x')
 
+    def test_one_deadline_for_a_whole_tool_result(self):
+        clock = [100.0]
+        timeouts = []
+
+        def slow(url, text, timeout=None):
+            timeouts.append(round(timeout, 2))
+            clock[0] += timeout            # the engine uses all the time it is given
+            return 0.1
+        with patch.object(basal.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(basal, 'credential_probability', side_effect=slow):
+            check = basal.credential_checker({'basal_url': self.url}, budget=10.0)
+            check('a'); check('b')
+            with self.assertRaises(basal.Unavailable):
+                check('c')
+        self.assertEqual(timeouts, [8.0, 2.0])          # the second call only gets what is left
+
     def test_checker_only_with_a_registered_engine(self):
         self.assertIsNone(basal.credential_checker({}))
         self.assertAlmostEqual(basal.credential_checker({'basal_url': self.url})('please unlock Kx7Rz2Qp9'), 0.9)
