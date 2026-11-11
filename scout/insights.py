@@ -17,7 +17,7 @@ MAX_EVENT_BYTES = 2048
 MIN_COUNT = 5
 TOOLS = set(SCHEMAS)
 ERROR_CODES = {'OFF', 'CONSENT_REQUIRED', 'INVALID_INPUT', 'NOT_FOUND', 'UNSUPPORTED_SOURCE', 'PLAN_ONLY', 'INSUFFICIENT_DATA', 'ARTIFACT_INVALID', 'IO_ERROR', 'QUALITY_GATE_NOT_MET'}
-PII_CATEGORIES = {'pesel', 'email', 'address', 'ssn', 'card', 'cvv', 'secret', 'iban', 'phone', 'name', 'prompt_injection'}
+PII_CATEGORIES = {'pesel', 'email', 'address', 'ssn', 'card', 'cvv', 'secret', 'code', 'pin', 'iban', 'phone', 'name', 'prompt_injection'}
 METHODS = {'logreg', 'knn', 'trees', 'own_cnn', 'tfidf_search', 'embed_search', 'regex', 'basal_zero_shot', 'lfm3', 'lfm25_moe', 'minicpm_v47', 'basal15', 'conv1d', 'agent_mlp', 'tfidf_logreg', 'small_local_llm', 'cloud', 'transformer_ner'}
 FAMILIES = {'triage', 'search', 'fields'}
 # Every Forward(...) reason in local_answers.py; anything else is recorded as 'error'.

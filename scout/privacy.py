@@ -2,7 +2,7 @@
 import re
 from datetime import date
 
-from . import pii_model
+from . import credentials, pii_model
 
 # Regex detectors. Phones, cards, SSNs and addresses come from the context model in pii_model.
 PATTERNS = {
@@ -181,7 +181,8 @@ def mask_local_details(text, names=False):
         # zero-width characters, full-width forms and Unicode hyphens hid e-mails,
         # cards and phones from every detector. Detect on a normalised copy, then map spans back to the original.
         clean, index = _normalise_for_detection(text)
-        found = spans(clean)
+        # password-like values without a known format (source thresholds, optional basal check: see credentials)
+        found = spans(clean) + credentials.spans(clean)
         if names:
             from . import name_model
             found = found + name_model.spans(clean)

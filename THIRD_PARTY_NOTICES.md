@@ -8,13 +8,14 @@ The following attributions and license designations are summaries. Consult the o
 
 | Dataset / provider | Use | Reported license |
 |---|---|---|
-| Gretel synthetic PII dataset, Gretel | PII and person-name model training on validation and evaluation on test (`models/name_model.json` weights are derived from it) | Apache License 2.0 |
+| Gretel synthetic PII dataset, Gretel | PII and person-name model training on validation and evaluation on test (`models/name_model.json` weights are derived from it); password-like detection thresholds chosen on validation and reported on test | Apache License 2.0 |
 | AdvPIIBench (AdvPII) | PII model training and disjoint reporting split | Creative Commons Attribution 4.0 International (CC BY 4.0) |
 | deepset/prompt-injections, deepset | Injection classifier training and evaluation | Apache License 2.0 |
 | Gandalf Ignore Instructions, Lakera | Injection classifier training and evaluation | MIT |
 | CLINC150 | Injection classifier training and evaluation; negative texts for the person-name model (lowercase word frequencies) and for false-positive measurements | Creative Commons Attribution 3.0 (CC BY 3.0) |
 | BANKING77 | Injection classifier training and evaluation; negative texts for the person-name model (lowercase word frequencies) and for false-positive measurements | Creative Commons Attribution 4.0 International (CC BY 4.0) |
 | TechQA | Injection classifier training and evaluation; negative texts for the person-name model (lowercase word frequencies) and for false-positive measurements | Apache License 2.0 |
+| hermes-function-calling-v1, Nous Research | False-positive measurement for password-like detection on tool-call results; no text or derived values are shipped (license checked on the dataset page on 2026-11-11) | Apache License 2.0 |
 
 The injection and PII-context artifacts contain hashed feature coefficients, not dataset text. The person-name model (`models/name_model.json`) contains hashed feature coefficients plus a list of 3,097 common lowercase English words with their counts, derived from TechQA, BANKING77 and CLINC150 texts; it contains no sentences or records. These artifacts are supplied under the plugin's MIT license subject to the dataset obligations above (attribution for the CC BY datasets). Original dataset texts are not supplied here; retain these attributions when redistributing the artifacts. Licenses of Gretel, TechQA, CLINC150, BANKING77 and AdvPIIBench were checked on the publishers' pages on 2026-11-07; the deepset and Gandalf designations are taken from their dataset cards.
 

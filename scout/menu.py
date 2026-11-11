@@ -9,7 +9,7 @@ from pathlib import Path
 MASK_SCOPES = ('observe', 'report', 'insights', 'mask')
 MODES = {'1': ('background', 'masking and flags as granted, no notices'),
          '2': ('report', 'masking and flags as granted, with short notices'),
-         '3': ('on_demand', 'masking as granted, no background collection')}
+         '3': ('on_demand', 'masking and flags as granted, no background collection')}
 
 
 def _yes(ask, question):
@@ -36,9 +36,9 @@ def _merged(grants, scopes):
 
 
 def masking_on(scout, ask, say):
-    say('Masking on: Local Scout replaces detected personal data and secrets in what Hermes sends to the model,')
-    say('flags hidden instructions in what the agent reads, and keeps local counters for Insights')
-    say('(categories and sources only, never text). Nothing leaves this machine because of it.')
+    say('Masking on: Local Scout replaces detected personal data, secrets and password-like values in what')
+    say('Hermes sends to the model, flags hidden instructions in what the agent reads, and keeps local counters')
+    say('for Insights (categories and sources only, never text). Nothing leaves this machine because of it.')
     if not _yes(ask, 'Turn masking on?'):
         return
     config = scout.profile()['config']

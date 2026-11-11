@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 
-from . import privacy, storage
+from . import basal, credentials, privacy, storage
 from .tool_guard import MAX_INPUT_CHARS
 
 ALERT = 'LOCAL_SCOUT_ALERT v1;'
@@ -22,7 +22,14 @@ class PromptGuard:
             raise ValueError('oversize')
         key = hashlib.sha256((('N' if names else '-') + text).encode('utf-8', 'surrogatepass')).digest()
         if key not in self.cache:
-            masked, categories = privacy.mask_local_details(text, names=names)
+            # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
+            # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
+            check = basal.credential_checker(self.scout.profile()['config']) if names else None
+            context = credentials.CONTEXT.set(('prompt' if names else 'text', check))
+            try:
+                masked, categories = privacy.mask_local_details(text, names=names)
+            finally:
+                credentials.CONTEXT.reset(context)
             self.cache[key] = (masked, tuple(sorted(categories)))
             if len(self.cache) > 200:
                 self.cache.popitem(last=False)

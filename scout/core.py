@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 
-from . import basal, privacy, storage, decisions, tool_guard
+from . import basal, credentials, privacy, storage, decisions, tool_guard
 from .profile import facts, GUIDE
 from .observer import extract
 from .calculator import calculate
@@ -485,7 +485,11 @@ class Scout:
                     masking_off = True
                     return None
                 event_id = secrets.token_hex(8)
-                replacement, categories, partial = tool_guard.transform(value, source, event_id)
+                context = credentials.CONTEXT.set(('terminal' if source == 'terminal' else 'text', basal.credential_checker(config)))
+                try:
+                    replacement, categories, partial = tool_guard.transform(value, source, event_id)
+                finally:
+                    credentials.CONTEXT.reset(context)
                 now = self.clock()
                 additions = []
                 if partial:

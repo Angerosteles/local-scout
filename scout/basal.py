@@ -130,3 +130,42 @@ def decide(url, texts, classes, descriptions=None):
         best = max(range(len(scores)), key=scores.__getitem__)
         results.append((None if other >= scores[best] else best, scores[best]))
     return results
+
+
+CREDENTIAL_QUESTION = 'Does this text contain a usable credential value?'
+CREDENTIAL_CRITERIA = {
+    'yes': 'the text contains an actual password, PIN, passphrase or access code value that someone could use to log '
+           'in or unlock something',
+    'no': 'the text contains no usable credential value (it may still talk about passwords in general)'}
+CREDENTIAL_TIMEOUT_SECONDS = 8
+
+
+def credential_probability(url, text):
+    """Probability that one line holds a usable credential (masking second opinion; one try, short timeout).
+
+    Raises ``Unavailable`` on any failure; the caller then falls back to its deterministic threshold."""
+    base = check_url(url)
+    body = {'state': text[:2000], 'questions': {'q': {'type': 'choice', 'criteria': CREDENTIAL_CRITERIA,
+                                                      'instructions': CREDENTIAL_QUESTION}}}
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+    request = urllib.request.Request(base + '/v1/systemone', data=json.dumps(body).encode(),
+                                     headers={'content-type': 'application/json'})
+    try:
+        with opener.open(request, timeout=CREDENTIAL_TIMEOUT_SECONDS) as response:
+            data = response.read(MAX_RESPONSE_BYTES + 1)
+        if len(data) > MAX_RESPONSE_BYTES:
+            raise Unavailable('the local basal engine answer is larger than 1 MB')
+        value = float(json.loads(data)['answers']['q']['probabilities']['yes'])
+    except Unavailable:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise Unavailable('the local basal engine did not answer') from exc
+    if not 0.0 <= value <= 1.0:
+        raise Unavailable('the local basal engine returned a probability outside [0, 1]')
+    return value
+
+
+def credential_checker(config):
+    """Second opinion for uncertain password-like values from the registered local basal engine, or None."""
+    url = config.get('basal_url') if isinstance(config, dict) else None
+    return (lambda line: credential_probability(url, line)) if url else None
