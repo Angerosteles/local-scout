@@ -1,8 +1,9 @@
-"""Local operator CLI: configure explicit profile, replay, freeze, evaluate, delete."""
+"""Local operator CLI: menu, configure explicit profile, replay, freeze, evaluate, delete."""
 import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 from .scout.context import LocalContext
 from .scout.core import Scout
@@ -12,9 +13,11 @@ from .scout import storage
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='scout')
     ap.add_argument('--home', type=Path, help='Explicit Hermes profile; alternatively HERMES_HOME, never implicit default')
-    sub = ap.add_subparsers(dest='command', required=True)
+    sub = ap.add_subparsers(dest='command')
+    sub.add_parser('menu', help='Interactive menu: masking on/off, mode, local triage, Insights')
     conf = sub.add_parser('configure')
-    conf.add_argument('--mode', choices=['off','background','report','on_demand'], required=True)
+    conf.add_argument('--mode', choices=['off','background','report','on_demand'],
+                      help='Required unless run in a terminal, where omitting it opens the menu')
     conf.add_argument('--dataset', default='demo_a')
     conf.add_argument('--source', type=Path)
     conf.add_argument('--synthetic-pii', action='store_true', help='Mask locally detected PII in this explicitly synthetic dataset')
@@ -77,6 +80,13 @@ def main(argv=None):
     if home is None:
         ap.error('Provide --home or HERMES_HOME; there is no default profile.')
     scout = Scout(LocalContext(home.resolve()))
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if args.command in (None, 'menu') or (args.command == 'configure' and args.mode is None):
+        if not interactive:
+            ap.error('--mode is required' if args.command == 'configure' else 'choose a command (the menu needs a terminal)')
+        from .scout.menu import run as menu
+        menu(scout, home)
+        return
     try:
         if args.command == 'setup-triage':
             from .scout.setup_triage import run

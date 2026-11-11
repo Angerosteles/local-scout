@@ -4,7 +4,17 @@ Part of the [Local Scout README](../README.md).
 
 ## Running the operator CLI
 
-After `hermes plugins install`, the code is in `~/.hermes/plugins/local-scout` and its Python dependencies are in the environment Hermes builds for plugins (`~/.hermes/installs/<id>/environments/<generation>/venv` in Hermes 0.23). The CLI runs as the package `plugin`:
+After `hermes plugins install`, the code is in `~/.hermes/plugins/local-scout` and its Python dependencies are in the environment Hermes builds for plugins (`~/.hermes/installs/<id>/environments/<generation>/venv` in Hermes 0.23). The launcher `scout.sh` finds the newest of those environments that actually has numpy and scikit-learn and runs the CLI with it:
+
+```sh
+alias scout="bash ~/.hermes/plugins/local-scout/scout.sh"
+scout            # interactive menu (needs a terminal)
+scout status     # any CLI command
+```
+
+`HERMES_HOME` selects another profile (default `~/.hermes`), and `LOCAL_SCOUT_PYTHON` names an interpreter explicitly. The CLI runs as the package `plugin`, so the launcher keeps a link named `plugin` to the installed directory in `${XDG_CACHE_HOME:-~/.cache}/local-scout` and puts that directory on the module path; relative file paths still refer to your current directory. Without a terminal, `scout` and `configure` without `--mode` exit with an error instead of opening the menu, so scripts keep their behaviour. Linux and macOS only.
+
+Without the launcher, the equivalent is:
 
 ```sh
 mkdir -p ~/.local/share/local-scout && ln -sfn ~/.hermes/plugins/local-scout ~/.local/share/local-scout/plugin
@@ -15,7 +25,7 @@ done
 "$PY" -m plugin.cli --home ~/.hermes status
 ```
 
-The loop picks the newest plugin environment that actually has the dependencies. For another Hermes profile, use that profile's home instead of `~/.hermes`. Linux and macOS only.
+The examples below write `python -m plugin.cli --home /path/to/profile …`; with the launcher that is `HERMES_HOME=/path/to/profile scout …`.
 
 ## Setup-triage in detail
 

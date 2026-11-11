@@ -46,34 +46,31 @@ The cascade, teacher loop, and multimodal capabilities are not part of this rele
 
 ## Quick start
 
-Requires Hermes `>=0.23.0,<0.24.0` and Python `>=3.11,<3.15`, on Linux or macOS. The operator CLI runs as the package `plugin` with the Python environment Hermes creates for plugins:
+Requires Hermes `>=0.23.0,<0.24.0` and Python `>=3.11,<3.15`, on Linux or macOS.
 
 ```sh
 hermes plugins install Angerosteles/local-scout --enable
-mkdir -p ~/.local/share/local-scout && ln -sfn ~/.hermes/plugins/local-scout ~/.local/share/local-scout/plugin
-cd ~/.local/share/local-scout
-for v in $(ls -td ~/.hermes/installs/*/environments/*/venv); do
-  "$v/bin/python" -c "import numpy, sklearn" 2>/dev/null && PY="$v/bin/python" && break
-done
-
-# core: masking for this profile
-"$PY" -m plugin.cli --home ~/.hermes configure --mode report \
-  --dataset profile --approve observe,report,insights,mask
-
-# optional: local triage from your labelled tickets (also enables local answers)
-"$PY" -m plugin.cli --home ~/.hermes setup-triage \
-  --history my_tickets.jsonl --marker "Customer message:" --mask-prompts
-
-# what happened so far
-"$PY" -m plugin.cli --home ~/.hermes insights
+alias scout="bash ~/.hermes/plugins/local-scout/scout.sh"
+scout
 ```
 
-Commands explain permissions in plain English before changing anything. Start a new Hermes session after installation. `configure --mode off` disables Scout; retained data remains. `--approve` replaces the whole grant map, so list every scope you want. For triage, use labelled examples without personal information and review the validation coverage/error curve. [Setup, profiles and local-answer configuration](docs/CONFIGURATION.md).
+`scout` opens a menu: masking on (recommended), Scout off, mode, local triage from a labelled file, and Insights. Every step explains what it enables and asks before changing anything. Start a new Hermes session afterwards. Add the alias line to `~/.bashrc` or `~/.zshrc` to keep it; `HERMES_HOME=/path/to/profile scout` selects another profile.
+
+The same steps as commands, for scripts (the menu prints them too):
+
+```sh
+scout configure --mode report --dataset profile --approve observe,report,insights,mask
+scout setup-triage --history my_tickets.jsonl --marker "Customer message:" --mask-prompts
+scout insights
+scout configure --mode off
+```
+
+`--approve` replaces the whole grant map, so list every scope you want. `setup-triage` also enables local answers. `--mode off` disables Scout; retained data remains. For triage, use labelled examples without personal information and review the validation coverage/error curve. [Setup, profiles and local-answer configuration](docs/CONFIGURATION.md).
 
 ## Evidence you can inspect
 
 - **Masking:** on the Gretel synthetic PII test, span recall was 100% for e-mails, 96% for cards, 94% for SSNs and 88% for phones. Complete address masking was 75.2%; prompt-name token recall/precision was 95.7%/67.9%. These are dataset measurements. [Detector evaluation](docs/EVIDENCE.md#content-safety).
-- **Speed and integration:** masking a 331-character e-mail took a median 0.8 ms on a laptop CPU (warm). 236 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
+- **Speed and integration:** masking a 331-character e-mail took a median 0.8 ms on a laptop CPU (warm). 251 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
 - **Injection:** recall was 97% on Gandalf and 57% on deepset, with false positives up to 2% on the reported negative sets. [Scope and datasets](docs/EVIDENCE.md#content-safety).
 - **Triage savings:** a paired 20-message benchmark measured 18.8–19.4% fewer **main-call tokens** on supported chat providers; title calls reduced the overall saving, and Codex Responses showed no saving. Small runs do not establish statistical significance or predict your workload. [Measured savings](docs/EVIDENCE.md#measured-savings).
 
@@ -82,6 +79,6 @@ Commands explain permissions in plain English before changing anything. Start a 
 - English only, with US-first phone and address formats plus IBAN and PESEL. Name detection covers capitalised ASCII forms; dates, including dates of birth, remain readable. Images and binary content are not scanned.
 - Consent and compatible Hermes middleware are required. Scan failures withhold user content by default; system prompts are kept (data split across text blocks is merged into one masked block), and only a failure of the whole masking step replaces the request (fail-closed); `LOCAL_SCOUT_GUARD_MODE=open` is the explicit fail-open option. If a Hermes middleware call itself fails, Hermes continues with the original request, and safe-worker mode can bypass plugins. Auxiliary masking is best effort: verify outgoing payloads for your deployment.
 - On Discord, Hermes names a new thread after its first message and copies that title into the system prompt. Detected values are masked there too, but person names are not. [Operational caveats](docs/SECURITY.md#auxiliary-calls-and-prompt-privacy-hermes-023).
-- Scout makes no network calls except optional basal requests to loopback (no proxies, no redirects). It reads content Hermes passes to plugin hooks and middleware, the selected profile's `config.yaml` (title settings), and history files you name. State stays in its plugin-data directory. It runs no shell commands, starts no background processes and stores no provider credentials. Local training artifacts can retain vocabulary; protect them separately from the narrower Insights export. [Full disclosures](docs/SECURITY.md#disclosures).
+- Scout makes no network calls except optional basal requests to loopback (no proxies, no redirects). It reads content Hermes passes to plugin hooks and middleware, the selected profile's `config.yaml` (title settings), and history files you name. State stays in its plugin-data directory (the `scout` launcher adds one link under `~/.cache/local-scout`). It runs no shell commands, starts no background processes and stores no provider credentials. Local training artifacts can retain vocabulary; protect them separately from the narrower Insights export. [Full disclosures](docs/SECURITY.md#disclosures).
 
 Local Scout is [MIT licensed](LICENSE). Thanks to Remigiusz Kinas for basal; dataset, dependency and optional-model attributions are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
