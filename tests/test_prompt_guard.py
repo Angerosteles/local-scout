@@ -78,8 +78,14 @@ class PromptGuardTests(unittest.TestCase):
         req = {'messages':[{'role':'user','content':'a@example.com'}]}
         with patch('plugin.scout.privacy.mask_local_details', side_effect=ValueError):
             self.assertEqual(self.apply(req).payload['messages'][0]['content'], WITHHELD)
-            with patch.dict(os.environ, {'LOCAL_SCOUT_GUARD_MODE':'open'}):
-                self.assertFalse(self.apply(req).changed)
+            with patch.dict(os.environ, {'LOCAL_SCOUT_GUARD_MODE':'open'}):   # ignored: process-wide
+                self.assertEqual(self.apply(req).payload['messages'][0]['content'], WITHHELD)
+            grants = self.scout.profile()['config']['grants']
+            self.scout.configure_local('report', grants=grants, guard_mode='open')
+            self.assertFalse(self.apply(req).changed)
+            self.scout.configure_local('report', grants=grants, guard_mode='closed')
+            self.assertEqual(self.apply(req).payload['messages'][0]['content'], WITHHELD)
+            self.assertNotIn('guard_mode', self.scout.profile()['config'])
         for content in ([{'type':'image_url','image_url':'secret'}], 'a'*(MAX_INPUT_CHARS+1)):
             self.assertEqual(self.apply({'messages':[{'role':'user','content':content}]}).payload['messages'][0]['content'], WITHHELD)
 

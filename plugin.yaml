@@ -1,5 +1,5 @@
 name: local-scout
-version: "1.7.4"
+version: "1.7.5"
 description: "Local privacy and safety layer: masks detected personal data and secrets in prompts, tool and MCP output and title calls in milliseconds, flags prompt injection, offers optional calibrated local triage, and shows what happened in local Insights"
 requires_hermes: ">=0.23.0,<0.24.0"
 manifest_version: 2
@@ -28,9 +28,6 @@ provides_middleware:
   - llm_execution
 capabilities: []
 requires_env: []
-optional_env:
-  - name: LOCAL_SCOUT_GUARD_MODE
-    description: "Set to open to send content unmodified when a scan fails (explicit opt-out of fail-closed masking); default unset = fail-closed"
 python_dependencies:
   - "numpy>=1.24,<3"
   - "scipy>=1.11,<2"

@@ -25,6 +25,8 @@ def main(argv=None):
     conf.add_argument('--answer-task', choices=['triage'], default=None)
     conf.add_argument('--answer-marker', default=None)
     conf.add_argument('--basal-url', default=None, help='Local basal engine, e.g. http://127.0.0.1:8765 (loopback only); empty string removes it')
+    conf.add_argument('--guard-mode', choices=['closed', 'open'], default=None,
+                      help='Scan-failure policy for this profile: closed (default) withholds content that could not be scanned; open passes it through unmasked')
     conf.add_argument('--basal-descriptions', type=Path, default=None, help='Optional JSON file {label: one-line description} for basal')
     setup = sub.add_parser('setup-triage')
     setup.add_argument('--history', type=Path, required=True)
@@ -120,9 +122,13 @@ def main(argv=None):
             descriptions = json.loads(args.basal_descriptions.read_text(encoding='utf-8')) if args.basal_descriptions else None
             scout.configure_local(args.mode, grants=grants, sources={args.dataset:args.source} if args.source else None,
                                   synthetic_pii=args.synthetic_pii, answer_task=args.answer_task,
-                                  answer_marker=args.answer_marker, basal_url=args.basal_url, basal_descriptions=descriptions)
+                                  answer_marker=args.answer_marker, basal_url=args.basal_url, basal_descriptions=descriptions,
+                                  guard_mode=args.guard_mode)
             result = dict(status='CONFIGURED', mode=args.mode,
                           effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())
+            if scout.profile()['config'].get('guard_mode') == 'open':
+                result['guard_notice'] = ('guard_mode=open: content that cannot be scanned is passed through unmasked '
+                                          'for this profile. Restore the default with --guard-mode closed.')
             if args.basal_url:
                 result['basal_notice'] = ('The engine is also asked about uncertain password-like values during masking: one line '
                                           'at a time, unmasked, on loopback, at most 8 s per tool result or provider request. '

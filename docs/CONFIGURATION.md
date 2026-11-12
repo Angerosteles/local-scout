@@ -68,6 +68,8 @@ python -m plugin.cli --home /path/to/profile insights --preview
 python -m plugin.cli --home /path/to/profile insights --export /local/path/summary.json
 ```
 
+**Scan-failure policy.** By default content that cannot be scanned is withheld (fail-closed). `configure --guard-mode open` passes it through unmasked for that profile only; `--guard-mode closed` restores the default. The setting lives in the profile's `settings.json`; the older `LOCAL_SCOUT_GUARD_MODE` environment variable is no longer read, because it applied to every profile served by the same process.
+
 Review the exact preview before choosing whether to share the local export. An installed CLI is also available as `scout`; `HERMES_HOME` can select the profile. Do not put private data in reasons or tool arguments: Hermes may log them.
 
 ## Local answers (llm_execution)

@@ -3,9 +3,8 @@ from collections import OrderedDict
 from contextvars import ContextVar
 import hashlib
 import json
-import os
 
-from . import basal, credentials, privacy, storage
+from . import basal, credentials, privacy, storage, tool_guard
 from .tool_guard import MAX_INPUT_CHARS
 
 # One basal checker (one shared time budget) per provider request: every block and message of a request uses it.
@@ -218,17 +217,21 @@ class PromptGuard:
             pass
 
     def __call__(self, request=None, **kwargs):
+        guard_open = False   # unreadable settings stay fail-closed
         try:
             config = self.scout.profile()['config']
             if config.get('mode', 'off') == 'off' or 'profile' not in config.get('grants', {}).get('mask', []):
                 return None
+            guard_open = config.get('guard_mode') == 'open'
             token = _REQUEST_CHECK.set(basal.credential_checker(config) or _NO_BASAL)
+            guard = tool_guard.GUARD_OPEN.set(guard_open)
             try:
                 return self.transform(request)
             finally:
+                tool_guard.GUARD_OPEN.reset(guard)
                 _REQUEST_CHECK.reset(token)
         except Exception:
-            if os.environ.get('LOCAL_SCOUT_GUARD_MODE') == 'open':
+            if guard_open:
                 return None
             return self.emergency(request)
 
@@ -255,6 +258,7 @@ class PromptGuard:
         except Exception:
             config = None
         token = _REQUEST_CHECK.set(_NO_BASAL)        # title calls never wait for the engine
+        guard = tool_guard.GUARD_OPEN.set(bool(config) and config.get('guard_mode') == 'open')
         try:
             if not isinstance(request_messages, list):
                 return
@@ -274,6 +278,7 @@ class PromptGuard:
         except Exception:
             return
         finally:
+            tool_guard.GUARD_OPEN.reset(guard)
             _REQUEST_CHECK.reset(token)
 
     def _mask_arguments(self, item):
@@ -313,7 +318,7 @@ class PromptGuard:
             new, categories, action = self.message(item, content_key, 'auxiliary_call' if aux else source,
                                                    names=role == 'user', marker=role != 'assistant')
         except Exception:
-            if source == 'system_prompt' or os.environ.get('LOCAL_SCOUT_GUARD_MODE') == 'open':
+            if source == 'system_prompt' or tool_guard.GUARD_OPEN.get():
                 # Never strip the agent's instructions because a scan failed; the explicit opt-out keeps content too.
                 return item, (), ('masked' if args_changed else None), source
             notice = '[WITHHELD]' if aux else (WITHHELD if source == 'user_prompt' else WITHHELD.replace('source=user_prompt', 'source=' + source))

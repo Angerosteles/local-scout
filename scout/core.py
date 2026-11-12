@@ -86,7 +86,7 @@ class Scout:
         return state
 
     def configure_local(self, mode='off', grants=None, sources=None, retention_days=30, basal_url=None, basal_descriptions=None,
-                        synthetic_pii=False, answer_task=None, answer_marker=None):
+                        synthetic_pii=False, answer_task=None, answer_marker=None, guard_mode=None):
         """Trusted local UI/CLI only; never registered as an agent tool."""
         mode = 'background' if mode == 'on' else mode
         if mode not in ('off', 'background', 'report', 'on_demand') or not 1 <= retention_days <= 30 or type(synthetic_pii) is not bool:
@@ -124,6 +124,15 @@ class Scout:
                     config['basal_url'] = basal.check_url(basal_url)
                 else:
                     config.pop('basal_url', None)
+            if guard_mode is not None:
+                # Per-profile scan-failure policy: 'closed' (default) withholds what could not be scanned,
+                # 'open' passes it through unmasked. Stored here, never read from the process environment.
+                if guard_mode not in ('closed', 'open'):
+                    raise ValueError
+                if guard_mode == 'open':
+                    config['guard_mode'] = 'open'
+                else:
+                    config.pop('guard_mode', None)
             if basal_descriptions is not None:
                 # Operator-written category descriptions; masked like any other text that may reach a model.
                 config['basal_descriptions'] = {label: privacy.mask_local_details(text)[0]
@@ -486,9 +495,11 @@ class Scout:
                     return None
                 event_id = secrets.token_hex(8)
                 context = credentials.CONTEXT.set(('terminal' if source == 'terminal' else 'text', basal.credential_checker(config)))
+                guard = tool_guard.GUARD_OPEN.set(config.get('guard_mode') == 'open')
                 try:
                     replacement, categories, partial = tool_guard.transform(value, source, event_id)
                 finally:
+                    tool_guard.GUARD_OPEN.reset(guard)
                     credentials.CONTEXT.reset(context)
                 now = self.clock()
                 additions = []
@@ -518,7 +529,7 @@ class Scout:
                         pass
                 return replacement
         except Exception:
-            return None if masking_off else tool_guard.withhold(value, 'scout_state_unavailable')[0]
+            return None if masking_off else tool_guard.withhold(value, 'scout_state_unavailable', force_closed=True)[0]
 
     def transform_tool_result(self, tool_name=None, args=None, result=None, session_id='', tool_call_id='', **kwargs):
         return self._transform_tool_output(result, 'tool_result', session_id, tool_call_id)
