@@ -1,5 +1,5 @@
 name: local-scout
-version: "1.7.5"
+version: "1.8.0"
 description: "Local privacy and safety layer: masks detected personal data and secrets in prompts, tool and MCP output and title calls in milliseconds, flags prompt injection, offers optional calibrated local triage, and shows what happened in local Insights"
 requires_hermes: ">=0.23.0,<0.24.0"
 manifest_version: 2

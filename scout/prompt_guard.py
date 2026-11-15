@@ -4,7 +4,7 @@ from contextvars import ContextVar
 import hashlib
 import json
 
-from . import basal, credentials, privacy, storage, tool_guard
+from . import basal, credentials, privacy, storage, tool_guard, insights
 from .tool_guard import MAX_INPUT_CHARS
 
 # One basal checker (one shared time budget) per provider request: every block and message of a request uses it.
@@ -26,6 +26,9 @@ class PromptGuard:
         if len(text.encode('utf-8', 'surrogatepass')) > MAX_INPUT_CHARS:
             raise ValueError('oversize')
         config = self.scout.profile()['config']
+        name_masking = config.get('name_masking', 'off')
+        address_masking = config.get('address_masking', 'on')
+        other_languages = config.get('other_languages', 'off')
         engine = config.get('basal_url') if names and isinstance(config, dict) else None
         # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
         # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
@@ -35,14 +38,14 @@ class PromptGuard:
             check = None if shared is _NO_BASAL else (shared or basal.credential_checker(config))
         # The cache key includes whether the engine is consulted: a title-call scan without basal must not stand in
         # for a main-request scan with it.
-        key = hashlib.sha256('\0'.join(('N' if names else '-', str(field or ''), str(engine or ''),
+        key = hashlib.sha256('\0'.join(('N' if names else '-', str(name_masking), str(address_masking), str(other_languages), str(field or ''), str(engine or ''),
                                         'B' if check else '0', text)).encode('utf-8', 'surrogatepass')).digest()
         if key in self.cache:
             return self.cache[key]
         state = {'degraded': False}
         context = credentials.CONTEXT.set(('prompt' if names else 'text', check, state))
         try:
-            masked, categories = privacy.mask_local_details(text, names=names, field=field)
+            masked, categories = privacy.mask_local_details(text, names=names, field=field, name_masking=name_masking, address_masking=address_masking, other_languages=other_languages)
         finally:
             credentials.CONTEXT.reset(context)
         result = (masked, tuple(sorted(categories)))
@@ -113,9 +116,10 @@ class PromptGuard:
         """Return (new item, categories, action) for one message, block by block.
 
         Scanned: text/input_text/output_text blocks, tool_result content and tool_use input leaves.
-        Unchanged: thinking, images and unknown blocks of assistant, tool and system messages.
-        User messages are the exception: an unscannable user block (image, file) withholds the message."""
+        Non-text blocks pass unchanged, with a coverage annotation where alerts are supported.
+        Invalid text blocks and text scan failures still follow the profile's guard policy."""
         content = item.get(content_key)
+        unscanned = tool_guard.unscanned_types(content)
         if content is None:
             return item, (), None
         if isinstance(content, str):
@@ -150,43 +154,37 @@ class PromptGuard:
                     categories.update(found)
                     new_content.append(dict(block, text=value) if found else block)
                 elif kind == 'tool_result':
-                    inner = block.get('content')
-                    if isinstance(inner, str):
-                        value, found = self.scan(inner)
-                        categories.update(found)
-                        new_content.append(dict(block, content=value) if found else block)
-                    elif isinstance(inner, list) and (merged_inner := self._merge_split_text(inner)) is not None:
-                        categories.update(merged_inner[1])
-                        new_content.append(dict(block, content=merged_inner[0]))
-                    elif isinstance(inner, list):
-                        local = set()
-                        blocks = [dict(b, text=self._leaves(b['text'], local)) if isinstance(b, dict) and b.get('type') in self.TEXT_TYPES and isinstance(b.get('text'), str) else b for b in inner]
-                        categories.update(local)
-                        new_content.append(dict(block, content=blocks) if local else block)
-                    else:
-                        new_content.append(block)
+                    nested, found, _ = self._message(block, 'content', source, marker=False)
+                    categories.update(found)
+                    new_content.append(nested)
                 elif kind == 'tool_use' and isinstance(block.get('input'), (dict, list)):
                     local = set()
                     value = self._leaves(block['input'], local)
                     categories.update(local)
                     new_content.append(dict(block, input=value) if local else block)
-                elif source == 'user_prompt':
-                    # Unscannable user content (e.g. an image or file) stays fail-closed: withheld, as documented.
-                    raise ValueError('unsupported user block')
+                elif kind in self.TEXT_TYPES:
+                    raise ValueError('invalid text block')
                 else:
-                    new_content.append(block)  # assistant/tool/system thinking, images, unknown blocks: unchanged
-            if not categories:
+                    new_content.append(block)
+            if not categories and not unscanned:
                 return item, (), None
         else:
             raise ValueError('unsupported content')
-        line = ALERT + ' categories=' + ','.join(sorted(categories)) + '; action=masked; source=' + source
+        action = 'masked' if categories else 'passed'
+        line = ALERT + ' categories=' + ','.join(sorted(categories)) + '; action=' + action + '; source=' + source
+        if unscanned:
+            line += '; unscanned=' + ','.join(sorted(unscanned))
+        if not categories and isinstance(content, list) and (
+                not marker or source in ('auxiliary_call', 'system_prompt') or
+                any(isinstance(b, dict) and b.get('text') == line for b in content)):
+            return item, (), None
         if marker and source not in ('auxiliary_call', 'system_prompt'):
             if isinstance(new_content, str):
                 new_content = new_content + '\n' + line
             else:
                 kinds = [b.get('type') for b in content if isinstance(b, dict)]
                 new_content.append({'type': 'input_text' if 'input_text' in kinds else 'text', 'text': line})
-        return dict(item, **{content_key: new_content}), tuple(sorted(categories)), 'masked'
+        return dict(item, **{content_key: new_content}), tuple(sorted(categories)), action
 
     def record(self, item, categories, action, source='user_prompt'):
         try:
@@ -210,7 +208,8 @@ class PromptGuard:
                     state['notifications'].append(dict(dataset_id='profile', prompt_categories=list(categories), prompt_masked=True))
                     state['notifications'] = state['notifications'][-100:]
                 try:
-                    storage.write_json(self.scout.root()/'aggregates.json', {'events': state['events']})
+                    if insights.collection_enabled(state['config']):
+                        storage.write_json(self.scout.root()/'aggregates.json', {'events': state['events']})
                 except Exception:
                     pass
         except Exception:
@@ -364,7 +363,7 @@ class PromptGuard:
                     continue
                 blocks, block_changed = [], False
                 for b in value:
-                    if isinstance(b.get('text'), str):
+                    if b.get('type') in self.TEXT_TYPES and isinstance(b.get('text'), str):
                         masked, cats = self.scan(b['text'])
                         if cats:
                             b = dict(b, text=masked); block_changed = True

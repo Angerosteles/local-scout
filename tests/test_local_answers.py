@@ -1,6 +1,7 @@
 """Offline contract tests: real Hermes middleware chain, no running Hermes."""
 import contextlib
 import importlib.util
+import inspect
 import io
 import json
 from pathlib import Path
@@ -34,13 +35,25 @@ class LocalAnswerTests(unittest.TestCase):
         cls.chain = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = cls.chain
         spec.loader.exec_module(cls.chain)
-        cls.prior_modules = {key: sys.modules.get(key) for key in ('hermes_cli', 'hermes_cli.plugins')}
+        cls.prior_modules = {key: sys.modules.get(key) for key in
+                             ('hermes_cli', 'hermes_cli.plugins', 'hermes_cli.plugins_dispatch')}
         package = ModuleType('hermes_cli')
         package.__path__ = []
         cls.plugins = ModuleType('hermes_cli.plugins')
         cls.plugins._delivery_manager = None
+        # Hermes 0.23.1 middleware passes each callback only the keywords it declares (or all with **kwargs).
+        dispatch = ModuleType('hermes_cli.plugins_dispatch')
+        class PluginDispatchMixin:
+            @staticmethod
+            def _hook_callback_kwargs(callback, payload):
+                parameters = inspect.signature(callback).parameters
+                if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                    return dict(payload)
+                return {name: value for name, value in payload.items() if name in parameters}
+        dispatch.PluginDispatchMixin = PluginDispatchMixin
         sys.modules['hermes_cli'] = package
         sys.modules['hermes_cli.plugins'] = cls.plugins
+        sys.modules['hermes_cli.plugins_dispatch'] = dispatch
 
     @classmethod
     def tearDownClass(cls):

@@ -12,16 +12,16 @@ from plugin.scout.prompt_guard import PromptGuard
 class NameModelTests(unittest.TestCase):
     def test_chat_and_form_names_masked_when_requested(self):
         for text in ('Hi, I am John Carter, please help', 'Patient Name: Alec Stafford, DOB: 1942-08-10', 'Thanks, Maria!'):
-            masked, cats = privacy.mask_local_details(text, names=True)
+            masked, cats = privacy.mask_local_details(text, names=True, name_masking='deep')
             self.assertIn('[NAME]', masked)
             self.assertIn('name', cats)
-        self.assertNotIn('Carter', privacy.mask_local_details('Hi, I am John Carter', names=True)[0])
+        self.assertNotIn('Carter', privacy.mask_local_details('Hi, I am John Carter', names=True, name_masking='deep')[0])
 
     def test_default_masking_unchanged_and_ordinary_capitals_kept(self):
         self.assertEqual(privacy.mask_local_details('Hi, I am John Carter')[0], 'Hi, I am John Carter')
         for text in ('Please restart the Apache server on Monday', 'Can I speak to Support about the refund?',
                      'def handle(self): return Path(x)'):
-            self.assertEqual(privacy.mask_local_details(text, names=True)[0], text)
+            self.assertEqual(privacy.mask_local_details(text, names=True, name_masking='deep')[0], text)
 
     def test_robust_inputs(self):
         self.assertEqual(name_model.spans(''), [])
@@ -40,7 +40,7 @@ class NameMaskingIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.scout = Scout(LocalContext(Path(self.tmp.name)))
-        self.scout.configure_local('report', grants={'mask': ['profile']})
+        self.scout.configure_local('report', grants={'mask': ['profile']}, name_masking='basic')
 
     def tearDown(self):
         self.tmp.cleanup()

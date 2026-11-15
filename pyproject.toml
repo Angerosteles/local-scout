@@ -1,6 +1,6 @@
 [project]
 name = "hermes-local-scout"
-version = "1.7.5"
+version = "1.8.0"
 description = "Offline Local Scout plugin for Hermes"
 requires-python = ">=3.11,<3.15"
 license = "MIT"
@@ -27,4 +27,4 @@ packages = ["hermes_local_scout", "hermes_local_scout.scout", "hermes_local_scou
 package-dir = {hermes_local_scout = "."}
 
 [tool.setuptools.package-data]
-hermes_local_scout = ["plugin.yaml", "recipes/*.md", "skills/decide/SKILL.md", "scout/models/*.npz", "scout/models/*.json", "INSIGHTS.md", "THIRD_PARTY_NOTICES.md"]
+hermes_local_scout = ["plugin.yaml", "recipes/*.md", "skills/decide/SKILL.md", "skills/masking/SKILL.md", "scout/models/*.npz", "scout/models/*.json", "INSIGHTS.md", "THIRD_PARTY_NOTICES.md"]

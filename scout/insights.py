@@ -69,12 +69,19 @@ def append_event(root, event):
         return
 
 
+def collection_enabled(config):
+    """Persist counters only with an observation grant and no explicit opt-out."""
+    grants = config.get('grants', {})
+    return (config.get('persist_observation', True) is not False
+            and bool(grants.get('observe') or grants.get('insights')))
+
+
 def record_hermes_tool(scout, name, status, duration_ms):
     """Hermes 0.23 post_tool_call: never inspect args, result or error prose."""
     try:
         config = scout.profile()['config']
         grants = config.get('grants', {})
-        if config.get('mode', 'off') == 'off' or not (grants.get('insights') or grants.get('observe')):
+        if config.get('mode', 'off') == 'off' or not collection_enabled(config) or not (grants.get('insights') or grants.get('observe')):
             return
         if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', name) or name in TOOLS:
             return
@@ -89,6 +96,8 @@ def record_hermes_tool(scout, name, status, duration_ms):
 def _session_cost(scout, session_id=None, tokens=0, used=False, observed=False):
     """Charge observed session deltas once; retain session identifiers only in RAM."""
     state = scout.profile()
+    if not collection_enabled(state['config']):
+        return
     known_session = isinstance(session_id, str) and 0 < len(session_id) <= 256
     key = session_id if known_session else None
     sessions = state.setdefault('agent_sessions', {})
@@ -141,7 +150,7 @@ def record_local_answer(scout, answered, reason, estimated_input_tokens_avoided=
     try:
         config = scout.profile()['config']
         grants = config.get('grants', {})
-        if config.get('mode', 'off') == 'off' or not (grants.get('insights') or grants.get('observe')):
+        if config.get('mode', 'off') == 'off' or not collection_enabled(config) or not (grants.get('insights') or grants.get('observe')):
             return
         estimate = estimated_input_tokens_avoided
         if type(estimate) not in (int, float) or not math.isfinite(estimate) or estimate < 0:
@@ -163,7 +172,7 @@ def record_tool(scout, name, result, duration_ms, response_bytes, session_id=Non
             return
         # Consent first: local operation counters need an explicit insights or observe grant.
         grants = config.get('grants', {})
-        if not (grants.get('insights') or grants.get('observe')):
+        if not collection_enabled(config) or not (grants.get('insights') or grants.get('observe')):
             return
         _session_cost(scout, session_id=session_id, used=True)
         ok = bool(isinstance(result, dict) and result.get('ok') is True)
@@ -188,6 +197,8 @@ def observe_usage_hook(scout):
             before = {}
         original(payload, **kwargs)
         try:
+            if not collection_enabled(scout.profile()['config']):
+                return
             after = scout.profile().get('usage', {})
             delta = {key: (after.get(key) or 0) - (before.get(key) or 0) for key in ('input_tokens', 'output_tokens')}
             if before != after:

@@ -86,7 +86,7 @@ class PromptGuardTests(unittest.TestCase):
             self.scout.configure_local('report', grants=grants, guard_mode='closed')
             self.assertEqual(self.apply(req).payload['messages'][0]['content'], WITHHELD)
             self.assertNotIn('guard_mode', self.scout.profile()['config'])
-        for content in ([{'type':'image_url','image_url':'secret'}], 'a'*(MAX_INPUT_CHARS+1)):
+        for content in ([{'type':'text','text':None}], 'a'*(MAX_INPUT_CHARS+1)):
             self.assertEqual(self.apply({'messages':[{'role':'user','content':content}]}).payload['messages'][0]['content'], WITHHELD)
 
     def test_registration_and_dedup_telemetry(self):

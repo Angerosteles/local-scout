@@ -11,6 +11,8 @@ from . import privacy, injection
 # Scan-failure policy of the profile being served, set per request/result by the caller from
 # settings.json ('guard_mode', written by `scout configure --guard-mode`). Default: fail-closed.
 GUARD_OPEN = ContextVar('local_scout_guard_open', default=False)
+ADDRESS_MASKING = ContextVar('local_scout_address_masking', default='on')
+OTHER_LANGUAGES = ContextVar('local_scout_other_languages', default='off')
 
 MAX_INPUT_CHARS = 256 * 1024
 
@@ -259,20 +261,45 @@ def withhold(value, reason, force_closed=False):
     return f"LOCAL_SCOUT_ALERT v1; action=withheld; reason={reason}; type={type(value).__name__}; size_bytes={size}", (), True
 
 
+TEXT_TYPES = ('text', 'input_text', 'output_text')
+NON_TEXT_TYPES = {
+    'image': 'image', 'image_url': 'image', 'input_image': 'image',
+    'audio': 'audio', 'input_audio': 'audio', 'output_audio': 'audio',
+    'file': 'file', 'input_file': 'file', 'document': 'file',
+    'video': 'video', 'thinking': 'thinking', 'redacted_thinking': 'thinking',
+}
+
+
+def unscanned_types(content):
+    """Content-free labels for native non-text blocks, never their payloads."""
+    found = set()
+    if isinstance(content, list):
+        for block in content:
+            if not isinstance(block, dict):
+                found.add('non_text')
+            elif block.get('type') == 'tool_result':
+                found.update(unscanned_types(block.get('content')))
+            elif block.get('type') not in (*TEXT_TYPES, 'tool_use'):
+                found.add(NON_TEXT_TYPES.get(block.get('type'), 'non_text'))
+    return found
+
+
 def _transform(value, source, event_id):
     """Return ``(replacement, categories, partial)`` without retaining matched text."""
-    if not isinstance(value, str):
-        return withhold(value, "unsupported_type")
-    if len(value.encode("utf-8", errors="surrogatepass")) > MAX_INPUT_CHARS:
-        return withhold(value, "oversize")
-
-    try:
-        parsed = json.loads(value)
-    except (json.JSONDecodeError, ValueError):
-        parsed = None
-        is_json = False
+    native = isinstance(value, (list, dict))
+    if native:
+        parsed, is_json = value, True
+    elif isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except (json.JSONDecodeError, ValueError):
+            if len(value.encode("utf-8", errors="surrogatepass")) > MAX_INPUT_CHARS:
+                return withhold(value, "oversize")
+            parsed, is_json = None, False
+        else:
+            is_json = True
     else:
-        is_json = True
+        return withhold(value, "unsupported_type")
 
     if is_json and isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
         # A top-level number can carry PII (e.g. a card number): scan it as text.
@@ -280,13 +307,17 @@ def _transform(value, source, event_id):
     if is_json and not isinstance(parsed, (str, list, dict)):
         return withhold(value, "unsupported_json_type")
 
-    found = set()
+    found, unscanned, opaque = set(), set(), set()
+    text_bytes = 0
     marker_slot = "\x00LOCAL_SCOUT_MARKER_SLOT\x00"
     slot_used = False
 
     def redact(text, field=None):
-        nonlocal slot_used
-        replacement, masked_categories = privacy.mask_local_details(text, field=field)
+        nonlocal slot_used, text_bytes
+        text_bytes += len(text.encode('utf-8', 'surrogatepass'))
+        if text_bytes > MAX_INPUT_CHARS:
+            raise ValueError('oversize text')
+        replacement, masked_categories = privacy.mask_local_details(text, field=field, address_masking=ADDRESS_MASKING.get(), other_languages=OTHER_LANGUAGES.get())
         if masked_categories:
             found.update(masked_categories)
         if _prompt_injection(text) or injection.is_injection(privacy._normalise_for_detection(text)[0]):
@@ -298,12 +329,20 @@ def _transform(value, source, event_id):
 
     try:
         if is_json:
-            def visit(item, field=None):
+            def visit(item, field=None, block=False):
                 if isinstance(item, str):
                     return redact(item, field)
                 if isinstance(item, list):
-                    return [visit(child, field) for child in item]
+                    return [visit(child, field, block=field == 'content' or (native and item is parsed)) for child in item]
                 if isinstance(item, dict):
+                    kind = item.get('type')
+                    if isinstance(kind, str) and (kind in NON_TEXT_TYPES or
+                            block and kind not in (*TEXT_TYPES, 'tool_result', 'tool_use')):
+                        unscanned.add(NON_TEXT_TYPES.get(kind, 'non_text'))
+                        opaque.add(id(item))
+                        return item
+                    if kind in TEXT_TYPES and not isinstance(item.get('text'), str):
+                        raise ValueError('invalid text block')
                     result = {}
                     for key, child in item.items():
                         clean_key = redact(key)
@@ -320,13 +359,17 @@ def _transform(value, source, event_id):
                     return masked_number if masked_number != str(item) else item
                 raise ValueError("unscanned JSON scalar")
 
-            changed = visit(parsed)
-            if not found:
+            changed = visit(parsed, block=native and isinstance(parsed, dict) and 'type' in parsed)
+            if not found and not unscanned:
                 return None, (), False
             categories = tuple(sorted(found))
             action = "masked+flagged" if "prompt_injection" in found and len(found) > 1 else ("flagged" if "prompt_injection" in found else "masked")
+            if not found:
+                action = 'passed'
             marker = (f"LOCAL_SCOUT_ALERT v1; categories={','.join(categories)}; action={action}; "
                       f"source={source}; event={event_id}")
+            if unscanned:
+                marker += '; unscanned=' + ','.join(sorted(unscanned))
 
             def fill_slot(item):
                 if isinstance(item, str):
@@ -334,17 +377,24 @@ def _transform(value, source, event_id):
                 if isinstance(item, list):
                     return [fill_slot(child) for child in item]
                 if isinstance(item, dict):
+                    if id(item) in opaque:
+                        return item
                     return {key: fill_slot(child) for key, child in item.items()}
                 return item
 
             changed = fill_slot(changed)
             if isinstance(changed, dict):
-                changed['_local_scout_alert'] = marker
+                if id(changed) in opaque:
+                    changed = [changed, {'type': 'text', 'text': marker}]
+                elif native and isinstance(changed.get('content'), list):
+                    changed['content'].append({'type': 'text', 'text': marker})
+                else:
+                    changed['_local_scout_alert'] = marker
             elif isinstance(changed, list):
-                changed.append(marker)
+                changed.append({'type': 'text', 'text': marker} if native else marker)
             else:
                 changed += "\n" + marker
-            body = json.dumps(changed, ensure_ascii=False, separators=(",", ":"))
+            body = changed if native else json.dumps(changed, ensure_ascii=False, separators=(",", ":"))
         else:
             body = redact(value)
             if not found:

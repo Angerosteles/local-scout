@@ -29,10 +29,10 @@ class Boundaries(unittest.TestCase):
         self.scout.configure_local('on_demand',grants={s:['a','profile','other'] for s in ('observe','report','train')},sources={'a':self.source})
     def call(self,name,**p):
         return json.loads(self.ctx.tools[name]['handler'](p))
-    def test_off_hook_does_not_create_state(self):
+    def test_default_hook_does_not_create_state(self):
         for event in demo_b(1000): self.scout.observe(event)
         self.assertFalse(self.scout.root().exists())
-        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'OFF')
+        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'CONSENT_REQUIRED')
 
     def test_cli_demo_consent_never_adds_profile_for_observe_or_mask(self):
         from plugin.cli import main
@@ -51,7 +51,7 @@ class Boundaries(unittest.TestCase):
     def test_profile_switch_does_not_share_consent(self):
         self.configure();self.assertTrue(self.call('scout_inspect',dataset_id='a')['ok'])
         self.ctx.home=self.home/'new-profile'
-        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'OFF')
+        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'CONSENT_REQUIRED')
         self.assertFalse(self.scout.root().exists())
     def test_reports_do_not_cross_dataset_scope(self):
         self.configure();self.scout.configure_local('report');self.scout.clock=lambda:1000
@@ -106,7 +106,7 @@ class Boundaries(unittest.TestCase):
         other.delete_local()
         self.scout.observe(text='synthetic@example.invalid')
         self.assertFalse(self.scout.root().exists())
-        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'OFF')
+        self.assertEqual(self.call('scout_inspect',dataset_id='a')['error']['code'],'CONSENT_REQUIRED')
 
     def test_invalid_and_nonfinite_calculator_inputs(self):
         self.configure()

@@ -1,118 +1,380 @@
-"""Interactive operator menu: the common actions without remembering flags.
-
-Every change is explained in plain English and confirmed first, and the equivalent command is printed so the same
-step can be scripted. The menu never enables anything on its own; it calls the same functions as the flag-based CLI.
-"""
-import argparse
-from pathlib import Path
+"""Single-screen local configuration, with state separate from terminal input."""
 import shlex
+import shutil
+import textwrap
 
-MASK_SCOPES = ('observe', 'report', 'insights', 'mask')
-MODES = {'1': ('background', 'masking and flags as granted, no notices'),
-         '2': ('report', 'masking and flags as granted, with short notices'),
-         '3': ('on_demand', 'masking and flags as granted, no background collection')}
+from . import insights
+
+# Frozen 1.8.0 synthetic holdout, see docs/EVIDENCE.md: 1,503 texts, 200 labelled values per type.
+HOLDOUT_TEXTS, VALUES = 1503, 200
+# Type, values fully masked (of 200), visible false masks over all 1,503 texts (secret includes 1 PIN span).
+STRUCTURED = (('e-mail', 200, 36), ('PESEL', 200, 0), ('card number', 195, 8), ('SSN', 197, 1),
+              ('IBAN', 187, 0), ('phone', 165, 9), ('password/PIN/key', 136, 13), ('address', 114, 10))
+# Language: full names, all name mentions, texts. Per mode: full masked, all masked, false names.
+NAME_TOTALS = {'EN': (319, 793, 973), 'PL': (191, 410, 470)}
+NAMES = {'basic': {'EN': (255, 369, 36), 'PL': (112, 176, 28)},
+         'deep': {'EN': (255, 505, 82), 'PL': (112, 247, 229)}}
+SCOPES = ('observe', 'report', 'mask', 'insights')
+SETTINGS = ('masking', 'names', 'addresses', 'languages', 'insights', 'mode')
+ROWS = SETTINGS + ('details', 'save', 'cancel')
+LABELS = {'languages': 'Other languages', 'mode': 'Reply note'}
+# 'mode' is shown as the reply note: report = note on, background = note off; on_demand stays a CLI/triage mode.
+OPTIONS = {'names': ('off', 'basic', 'deep'), 'mode': ('report', 'background')}
+NOTE = {'report': 'on', 'background': 'off', 'on_demand': 'off (triage)'}
+DEEP_WARNING = 'Deep is aggressive; noisy on Polish text: ≈49 false names per 100 PL texts.'
+HELP = '↑↓ move · ENTER/SPACE change · s save · q quit'
+DETAILS_HELP = 'ENTER or ESC returns · full counts: docs/EVIDENCE.md'
+DESCRIPTIONS = {
+    'masking': {True: 'Replace detected data with placeholders before the model sees it.',
+                False: 'Scout is off: nothing is masked, noted or counted.'},
+    'names': {'off': 'Names stay visible. Turn on to mask names in your prompts (not tool results).',
+              'basic': 'Full names, a title with a surname, and their repeats.',
+              'deep': 'Also single names in context; more false masks, very noisy on Polish.'},
+    'addresses': {True: 'Mask street addresses (English and Polish formats).',
+                  False: 'Street addresses stay visible.'},
+    'languages': {True: 'Also mask names and addresses in other languages (less tested).',
+                  False: 'Names and addresses only in English/Polish; other data in every language.'},
+    'insights': {True: 'Save local counts (data types found, tool and token use); never text or values.',
+                 False: 'Nothing is counted on disk.'},
+    'mode': {'report': 'After a reply, a note names the data types detected (never values).',
+             'background': 'No note under replies; masking works the same.',
+             'on_demand': 'Triage mode (from setup-triage): no reply note. ENTER turns the note on.'},
+    'details': 'ENTER opens the table: detection and false masks for every type.',
+    'save': 'Write these settings to this Hermes profile.',
+    'cancel': 'Leave setup; asks before discarding unsaved changes.',
+}
 
 
-def _yes(ask, question):
-    return ask(question + ' [y/N] ').strip().lower() in ('y', 'yes')
+def _percent(count, total):
+    return round(100 * count / total)
 
 
-def describe(scout):
-    """One status line: mode and what is switched on, never data."""
+def _per100(count, texts):
+    return '0' if count == 0 else f'{100 * count / texts:.1f}'
+
+
+def _span(values, suffix=''):
+    low, high = min(values, key=float), max(values, key=float)
+    return f'{low}{suffix}' if low == high else f'{low}–{high}{suffix}'
+
+
+def summary(state):
+    """Overview shared by the setup screen and /scout status, computed from the same table as Details."""
+    if not state['masking']:
+        return ['Masking off: nothing is masked; data reaches the model as typed.']
+    types = [row for row in STRUCTURED if state['addresses'] or row[0] != 'address']
+    lines = ['Masks: ' + ', '.join(name for name, _, _ in types),
+             f"  {_span([_percent(n, VALUES) for _, n, _ in types], '%')} detected · "
+             f"{_span([_per100(f, HOLDOUT_TEXTS) for _, _, f in types])} false masks per 100 texts"]
+    names = state['names']
+    if names == 'off':
+        lines.append('Names: off (optional; only in your prompts)')
+    else:
+        column, scope = (0, 'full names') if names == 'basic' else (1, 'all names')
+        rows = NAMES[names]
+        lines += [f'Names: {names}, only in your prompts',
+                  f"  {scope} {_span([_percent(rows[lang][column], NAME_TOTALS[lang][column]) for lang in rows], '%')}"
+                  f" detected · {_span([_per100(rows[lang][2], NAME_TOTALS[lang][2]) for lang in rows])}"
+                  ' false masks per 100 texts']
+    return lines
+
+
+def details(width=80):
+    """Every measured type in one table: header, rows, notes (no blank lines inside a part)."""
+    header = ['Local Scout · measurements',
+              f'Synthetic test, {HOLDOUT_TEXTS:,} texts written without the code: per type {VALUES} values',
+              'to mask and 50 lookalikes to keep. Detected = value fully masked.',
+              'False mask = masked text that was not that data, per 100 texts.']
+    notes = ['Names: only in your prompts; false masks per 100 EN or PL texts.',
+             'Names, addresses: EN and PL. CVV: masked after a label, not measured.']
+    names = [(f'{mode} {lang}', full, every, false) + NAME_TOTALS[lang]
+             for mode, langs in NAMES.items() for lang, (full, every, false) in langs.items()]
+    if width < 62:  # compact rows instead of columns that would wrap
+        rows = ['  type: detected · false masks / 100 texts']
+        rows += [f'  {name}: {_percent(n, VALUES)}% · {_per100(f, HOLDOUT_TEXTS)}' for name, n, f in STRUCTURED]
+        rows += ['  names (optional): full · all · false / 100']
+        rows += [f'  {name}: {_percent(full, tf)}% · {_percent(every, ta)}% · {_per100(false, texts)}'
+                 for name, full, every, false, tf, ta, texts in names]
+        return header, rows, notes
+    rows = [f"  {'Type':<18}{'Detected':<15}False masks / 100 texts"]
+    rows += [f'  {name:<18}{f"{n}/{VALUES}":<8}{_percent(n, VALUES):>4}%   {_per100(f, HOLDOUT_TEXTS)}'
+             for name, n, f in STRUCTURED]
+    rows += [f"  {'Names (optional)':<18}{'Full names':<15}{'All names':<15}False / 100"]
+    rows += [f'  {name:<18}{f"{full}/{tf}":<8}{_percent(full, tf):>4}%  '
+             f'{f"{every}/{ta}":<8}{_percent(every, ta):>4}%  {_per100(false, texts)}'
+             for name, full, every, false, tf, ta, texts in names]
+    return header, rows, notes
+
+
+def state_for(scout):
     config = scout.profile()['config']
     grants = config.get('grants', {})
-    on = lambda scope: 'profile' in grants.get(scope, [])
-    triage = 'on' if grants.get('answer') and config.get('answer_task') == 'triage' else 'off'
     mode = config.get('mode', 'off')
-    masking = 'ON' if mode != 'off' and on('mask') else 'off'
-    return f"mode: {mode} · masking: {masking} · insights: {'on' if on('insights') else 'off'} · local triage: {triage}"
+    return dict(masking=mode != 'off' and 'profile' in grants.get('mask', []),
+                names=config.get('name_masking', 'off'),
+                addresses=config.get('address_masking', 'on') == 'on',
+                languages=config.get('other_languages', 'off') == 'on',
+                insights=mode != 'off' and insights.collection_enabled(config),
+                mode=mode if mode != 'off' else 'report')
 
 
-def _merged(grants, scopes):
-    merged = {key: list(value) for key, value in grants.items()}
+def transition(state, index, key):
+    """Mutate draft only; return selected row and optional save/cancel/details action."""
+    if key in tuple(str(i) for i in range(1, len(ROWS) + 1)):
+        index, key = int(key) - 1, '\n'
+    if key in ('up', 'down'):
+        index = (index + (-1 if key == 'up' else 1)) % len(ROWS)
+    elif key == 's':
+        return index, 'save'
+    elif key == '\x03':
+        return index, 'discard'
+    elif key in ('\x1b', 'q'):
+        return index, 'cancel'
+    elif key in (' ', '\r', '\n', 'left', 'right'):
+        name = ROWS[index]
+        if name in ('save', 'cancel', 'details'):
+            if key in (' ', '\r', '\n') or (name == 'details' and key == 'right'):
+                return index, name
+        elif name in OPTIONS:
+            options = OPTIONS[name]
+            current = state[name] if state[name] in options else options[-1]
+            state[name] = options[(options.index(current) + (-1 if key == 'left' else 1)) % len(options)]
+        else:
+            state[name] = not state[name]
+    return index, None
+
+
+def _wrap(lines, width):
+    return [part for line in lines for part in (textwrap.wrap(
+        line, width=width, subsequent_indent='   ' if width > 6 else '',
+        break_long_words=True, break_on_hyphens=False) or [''])]
+
+
+def display(value, name=None):
+    if name == 'mode':
+        return NOTE.get(value, value)
+    return ('on' if value else 'off') if isinstance(value, bool) else value.replace('_', ' ')
+
+
+def label(name):
+    return LABELS.get(name, name.title())
+
+
+def render(state, index=0, width=80, confirming=False):
+    """Render complete text at at most 80 columns; narrow screens reflow."""
+    width = max(1, min(80, width))
+    header = ['Local Scout setup', *summary(state),
+              f'Synthetic test, {HOLDOUT_TEXTS:,} texts; Details shows every type.']
+    body = []
+    for i, name in enumerate(ROWS):
+        text = label(name)
+        if name in SETTINGS:
+            options = OPTIONS.get(name, (True, False))
+            selected = state[name] if state[name] in options else options[-1]
+            buttons = '  '.join(f"({'•' if selected == value else ' '}) {display(value, name)}" for value in options)
+            if name == 'mode' and state[name] not in options:
+                buttons += '  · triage mode'
+            text = f'{text:<16} {buttons}'
+        elif name == 'details':
+            text = f'{text:<16} ▸ detection and false masks per type'
+        body.extend(_wrap([(' → ' if i == index else '   ') + text], width))
+    name = ROWS[index]
+    description = DESCRIPTIONS[name][state[name]] if name in SETTINGS else DESCRIPTIONS[name]
+    footer = _wrap(['Save changes? [y/n] · ESC returns to editing' if confirming else description, HELP], width)
+    return '\n\n'.join('\n'.join(lines) for lines in (_wrap(header, width), body, footer))
+
+
+def render_details(width=80):
+    width = max(1, min(80, width))
+    header, rows, notes = details(width)
+    return '\n\n'.join('\n'.join(_wrap(lines, width)) for lines in (header, rows, notes + [DETAILS_HELP]))
+
+
+def command_and_grants(scout, state, changed=None):
+    config = scout.profile()['config']
+    grants = {scope: list(targets) for scope, targets in config.get('grants', {}).items()}
+    scopes = SCOPES if changed is None else (
+        ('insights',) if changed == 'insights' else
+        ('observe', 'report', 'mask') if changed == 'masking' else ())
     for scope in scopes:
-        if 'profile' not in merged.setdefault(scope, []):
-            merged[scope].append('profile')
-    return merged
+        targets = [target for target in grants.get(scope, []) if target != 'profile']
+        enabled = state['insights'] if scope == 'insights' else state['masking']
+        if enabled:
+            targets.append('profile')
+        if targets or scope == 'insights':
+            grants[scope] = targets
+        else:
+            grants.pop(scope, None)
+    mode = state['mode'] if state['masking'] else 'off'
+    if changed == 'mode':
+        mode = state['mode']
+    elif changed is not None and changed != 'masking':
+        mode = config.get('mode', 'off')
+    approvals = ','.join(f'{scope}@{target}' for scope, targets in sorted(grants.items()) for target in (targets or ['']))
+    args = ['scout', 'configure', '--mode', mode, '--approve', approvals,
+            '--name-masking', state['names'], '--address-masking', 'on' if state['addresses'] else 'off',
+            '--other-languages', 'on' if state['languages'] else 'off']
+    persist = state['insights'] if changed in (None, 'insights') else config.get('persist_observation')
+    if persist is not None:
+        args += ['--insights', 'on' if persist else 'off']
+    return shlex.join(args), grants, mode
+
+
+def save_state(scout, state, previous, changed=None):
+    """Persist menu or slash edits through the same local configuration path."""
+    command, grants, mode = command_and_grants(scout, state, changed)
+    config = scout.profile()['config']
+    scout.configure_local(mode, grants=grants, name_masking=state['names'],
+                          address_masking='on' if state['addresses'] else 'off',
+                          other_languages='on' if state['languages'] else 'off',
+                          retention_days=config.get('retention_days', 30),
+                          synthetic_pii=config.get('synthetic_pii', False),
+                          persist_observation=state['insights'] if changed in (None, 'insights')
+                          else config.get('persist_observation'))
+    changes = [f"{'reply note' if k == 'mode' else k} {display(previous[k], k)} → {display(state[k], k)}"
+               for k in SETTINGS if previous[k] != state[k]]
+    messages = ['Saved: ' + (', '.join(changes) or 'profile defaults') +
+                '. Active from your next message — no restart needed.']
+    if previous['masking'] != state['masking']:
+        messages.append('The masking system-prompt section updates in a new session.')
+    if state['names'] == 'deep' and changed == 'names':
+        messages.append(DEEP_WARNING)
+    return ['\n'.join(_wrap(message.splitlines(), 80)) for message in messages], command
+
+
+def run_keys(scout, keys, draw, say=print, width=lambda: 80):
+    state, index = state_for(scout), 0
+    initial = state.copy()
+    confirming = viewing = False
+    def redraw():
+        draw(render_details(width()) if viewing else render(state, index, width(), confirming))
+    redraw()
+    try:
+        for key in keys:
+            dirty = state != initial
+            if viewing:
+                if key == '\x03':
+                    break
+                if key in ('\x1b', 'q', ' ', '\r', '\n', 'left'):
+                    viewing = False
+                redraw()
+                continue
+            if confirming:
+                if key.lower() not in ('y', 'n'):
+                    if key == '\x1b':
+                        confirming = False
+                    redraw()
+                    continue
+                action = 'save' if key.lower() == 'y' else 'discard'
+            else:
+                index, action = transition(state, index, key)
+            if action == 'details':
+                viewing = True
+                redraw()
+                continue
+            if action == 'cancel':
+                if dirty:
+                    confirming = True
+                    redraw()
+                    continue
+                say('No changes.')
+                return
+            if action == 'discard':
+                break
+            if action == 'save':
+                if not dirty and (scout.root() / 'settings.json').is_file():
+                    say('No changes.')
+                    return
+                messages, command = save_state(scout, state, initial)
+                for message in messages:
+                    say(message)
+                say('Same as: ' + command)
+                return
+            redraw()
+    except (KeyboardInterrupt, EOFError):
+        pass
+    say('Cancelled. Changes discarded.' if state != initial else 'No changes.')
 
 
 def masking_on(scout, ask, say):
-    say('Masking on: Local Scout replaces detected personal data, secrets and password-like values in what')
-    say('Hermes sends to the model, flags hidden instructions in what the agent reads, and keeps local counters')
-    say('for Insights (categories and sources only, never text). Nothing leaves this machine because of it.')
-    if not _yes(ask, 'Turn masking on?'):
+    """Compatibility for callers of the former guided action."""
+    if ask('Turn masking on? [y/N] ').strip().lower() not in ('y', 'yes'):
         return
-    config = scout.profile()['config']
-    mode = config.get('mode', 'off')
-    scout.configure_local('report' if mode == 'off' else mode, grants=_merged(config.get('grants', {}), MASK_SCOPES))
-    say('Masking is on. Start a new Hermes session to use it.')
-    say('Other grants were kept. On a fresh profile this equals:')
-    say('  scout configure --mode report --dataset profile --approve observe,report,insights,mask')
-
-
-def scout_off(scout, ask, say):
-    say('Off: Local Scout stops masking, flagging and counting. Granted permissions and local data are kept.')
-    if _yes(ask, 'Turn Local Scout off?'):
-        scout.configure_local('off')
-        say('Local Scout is off. Same as: scout configure --mode off')
-
-
-def choose_mode(scout, ask, say):
-    for key, (mode, text) in MODES.items():
-        say(f'  {key}) {mode:<10} {text}')
-    picked = MODES.get(ask('Mode: ').strip())
-    if picked and _yes(ask, f'Switch to {picked[0]}?'):
-        scout.configure_local(picked[0])
-        say(f'Mode set to {picked[0]}. Same as: scout configure --mode {picked[0]}')
-
-
-def setup_triage(scout, ask, say):
-    path = Path(ask('Labelled tickets file (JSONL with "text" and "label"): ').strip()).expanduser()
-    if not path.is_file():
-        say('No such file.')
+    state = state_for(scout)
+    names = ask('Names: 1 basic, 2 deep, 3 off: ').strip()
+    address = ask('Addresses: on/off: ').strip().lower()
+    if names not in ('', '1', '2', '3') or address not in ('', 'on', 'off'):
         return
-    marker = ask('Answer marker that starts the customer message in your prompts (Enter for none): ').strip() or None
-    args = argparse.Namespace(history=path, dataset='support', marker=marker, mask_prompts=_yes(ask, 'Also mask prompts?'),
-                              recipe='tfidf_logreg', max_error=None, yes=False, json=False)
-    from .setup_triage import run
-    result = run(scout, args)  # explains the permissions and asks for confirmation itself
-    say('Ready: {examples} examples, {classes} classes; threshold {threshold:.2f}.'.format(**result))
-    command = ['scout', 'setup-triage', '--history', str(path)] + (['--marker', marker] if marker else []) + \
-        (['--mask-prompts'] if args.mask_prompts else [])
-    say('Same as: ' + shlex.join(command))
+    state.update(masking=True, names={'1': 'basic', '2': 'deep', '3': 'off'}.get(names, state['names']),
+                 addresses=(address == 'on') if address else state['addresses'])
+    command, grants, mode = command_and_grants(scout, state)
+    scout.configure_local(mode, grants=grants, name_masking=state['names'],
+                          address_masking='on' if state['addresses'] else 'off',
+                          other_languages='on' if state['languages'] else 'off')
+    say('Same as: ' + command)
 
 
-def show_insights(scout, ask, say):
-    from . import insights
-    from .presentation import insights_terminal
-    insights_terminal(insights.summarize(scout.root(), 30))
+def run(scout, home):
+    try:
+        import curses
+    except ImportError:
+        def keys():
+            while True:
+                value = input('Row # to change; s save; q/ESC quit: ').strip()
+                yield {'enter': '\n', 'space': ' ', 'esc': '\x1b', '': '\n'}.get(value.lower(), value.lower())
+        def draw(screen):
+            header, body, footer = screen.split('\n\n')
+            lines = body.splitlines()
+            # Number setup rows; the Details table is shown as is (ENTER returns).
+            numbered = '\n'.join(f'{i + 1:>2}. {line[3:]}' if '→' in body else line for i, line in enumerate(lines))
+            width = max(1, min(80, shutil.get_terminal_size((80, 24)).columns))
+            print('\n'.join(_wrap('\n\n'.join((header, numbered, footer)).splitlines(), width)))
+        run_keys(scout, keys(), draw)
+        return
 
-
-ACTIONS = [('Masking on (recommended)', masking_on), ('Local Scout off', scout_off),
-           ('Mode: background / report / on demand', choose_mode),
-           ('Set up local triage from a labelled file', setup_triage), ('Insights (last 30 days)', show_insights)]
-
-
-def run(scout, home, ask=input, say=print):
-    """Loop until the user quits; a failed action is reported without input details and the menu continues."""
-    from .setup_triage import SetupError
-    while True:
-        say('')
-        say(f'Local Scout · profile {home}')
-        say(describe(scout))
-        for number, (label, _) in enumerate(ACTIONS, 1):
-            say(f' {number}) {label}')
-        say(' q) Quit')
+    def screen(stdscr):
         try:
-            choice = ask('Choose: ').strip().lower()
-            if choice in ('q', 'quit', 'exit', ''):
-                return
-            if choice.isdigit() and 1 <= int(choice) <= len(ACTIONS):
-                ACTIONS[int(choice) - 1][1](scout, ask, say)
-        except (EOFError, KeyboardInterrupt):
-            say('')
-            return
-        except SetupError as exc:
-            say('Scout: ' + str(exc))
-        except Exception:
-            say('Scout: that step did not complete; input details hidden.')
+            curses.curs_set(0)
+        except curses.error:
+            pass
+        stdscr.keypad(True)
+        def draw(text):
+            stdscr.clear()
+            height, width = stdscr.getmaxyx()
+            header, body, footer = [part.splitlines() for part in text.split('\n\n')]
+            cursor = next((i for i, line in enumerate(body) if line.lstrip().startswith('→')), 0)
+            # Keep the selected row and bottom help visible on short terminals.
+            foot = footer[-max(0, height - 2):] if height > 2 else []
+            if len(header) + len(body) + len(foot) + 2 <= height:
+                header, foot = header + [''], [''] + foot
+            head = header[:max(0, height - len(foot) - 2)]
+            visible = max(1, height - len(head) - len(foot))
+            offset = max(0, cursor - visible + 1)
+            shown = head + body[offset:offset + visible] + foot
+            for y, line in enumerate(shown[:height]):
+                attr = curses.A_BOLD if line == header[0] or line.startswith(' → ') else curses.A_NORMAL
+                if line.startswith(('Synthetic test', 'Names: only')):
+                    attr = curses.A_DIM
+                try:
+                    stdscr.addnstr(y, 0, line, max(0, width - 1), attr)
+                except curses.error:
+                    pass
+            stdscr.refresh()
+        def keys():
+            while True:
+                key = stdscr.getch()
+                yield {curses.KEY_UP: 'up', curses.KEY_DOWN: 'down', curses.KEY_LEFT: 'left',
+                       curses.KEY_RIGHT: 'right', ord('k'): 'up', ord('j'): 'down',
+                       curses.KEY_ENTER: '\n'}.get(key, chr(key) if 0 <= key < 256 else '')
+        run_keys(scout, keys(), draw, messages.append, width=lambda: max(1, stdscr.getmaxyx()[1] - 1))
+    messages = []
+    try:
+        curses.wrapper(screen)
+    except KeyboardInterrupt:
+        messages = ['Cancelled. Changes discarded.']
+    for message in messages:
+        print(message)
+
+
+def non_tty(scout):
+    print('Interactive mode requires a terminal.')

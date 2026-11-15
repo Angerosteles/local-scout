@@ -1,5 +1,6 @@
 # Local Scout — local privacy for everyday agent work
 
+
 Local Scout is a local privacy layer for Hermes Agent, built for people who handle customer and co-worker data at work: support tickets, inboxes and internal documents. Hermes already redacts secrets such as API keys in file and terminal output. Scout adds masking for **detected personal data and password-like values** in the content the model reads, plus prompt-injection flags and optional local ticket triage.
 
 The practical idea: the model can understand an overdue invoice without receiving the customer's detected e-mail address or card number. Detectors make mistakes; Scout reduces exposure within supported text paths, rather than making the agent a secure sandbox.
@@ -12,25 +13,47 @@ In this live Discord test, the user typed an e-mail address and card number. The
 
 The data is synthetic; the Discord session and the model calls (DeepSeek V4.1 Flash through OpenRouter) were real. This shows one observed payload and response, not general attack resistance. The bot's refusal is model behaviour; injection is **flagged, not blocked**. [Gateway evidence and caveats](docs/SECURITY.md#gateways).
 
-**What changes with Scout** (the same synthetic content in a live Hermes 0.23 process; observed test cases, not a guarantee of full coverage):
-
-| Observed in Hermes 0.23 | Hermes alone | With Scout |
-|---|---|---|
-| E-mail, phone, card, SSN, IBAN, address in `read_file`, terminal and MCP results | unmasked | masked |
-| Stripe, GitHub and AWS keys in an MCP tool result | unmasked | masked |
-| A hidden instruction in a tool result | no Scout alert | flagged |
+[Observed Hermes-alone / Scout comparison](docs/EVIDENCE.md#what-hermes-already-does-and-what-local-scout-adds): synthetic live cases, not detection-rate or security guarantees.
 
 ## How it works
 
-With explicit `mask` consent, Scout runs locally in Hermes' request middleware and tool-output hooks. It replaces detected e-mails, phones, cards and CVVs, IBANs, PESEL and SSN numbers, addresses, API keys and other secrets with placeholders. **Passwords, 2FA codes and PINs without a known format** (`use IkXzYx33@$`, `Your verification code is 482913`) become `[SECRET]`, `[CODE]` and `[PIN]`, judged by their shape, nearby cue words and the usual norms, while URLs, IDs and code stay readable. An optional local basal engine gives a second opinion on uncertain ones ([method and limits](docs/EVIDENCE.md#passwords-and-pins)). Person-name masking applies to user prompts. Supported paths include file and terminal results, MCP tool results, conversation text, system instructions and tool-call arguments; auxiliary calls such as session titles receive best-effort masking too. No network calls (an optional basal engine is reached on loopback only), no GPU.
+Enabling the plugin in Hermes enables local masking of detected structured data and password-like values on a fresh profile, in Hermes' request middleware and tool-output hooks. The in-memory defaults are `mode=report`, profile grants `observe`, `report` and `mask`, names off, addresses on, other languages off, and Insights, triage and learning off. Scout does not store prompt contents or detected values; explicit setting changes are saved locally, and counters only with Insights on (legacy `observe` grants count as Insights on unless disabled). Plugin, masking and name masking are three separate choices: `/scout masking off` is a lasting opt-out, and changing names while masking is off does not turn masking on.
 
-**Masking is one-way.** Placeholders are not restored in replies or outgoing arguments. Reversible tokenization would let a hidden instruction turn a placeholder back into real data when the agent sends it. Here the model receives the placeholder instead of the detected value. The tradeoff is deliberate: the model cannot address an e-mail using `[EMAIL]`.
+Scout replaces detected e-mails, phones, cards and CVVs, IBANs, PESEL and SSN numbers, addresses, API keys and other secrets with placeholders. **Passwords, 2FA codes and PINs without a known format** (`use IkXzYx33@$`, `Your verification code is 482913`) become `[SECRET]`, `[CODE]` and `[PIN]`, judged by their shape, nearby cue words and the usual norms, while URLs, IDs and code stay readable. An optional local basal engine gives a second opinion on uncertain ones ([method and limits](docs/EVIDENCE.md#passwords-and-pins)). Person-name masking applies to user prompts. Supported paths include file and terminal results, MCP tool results, conversation text, system instructions and tool-call arguments; auxiliary calls such as session titles receive best-effort masking too. No network calls (an optional basal engine is reached on loopback only), no GPU.
+
+**Masking is one-way.** Placeholders are not restored in replies or outgoing arguments. The model cannot address an e-mail using `[EMAIL]`. Scout registers the `masking` skill when supported. With profile masking enabled, it also adds a short system-prompt section for new sessions. The guidance says to preserve masks, avoid guessing originals, distinguish people by role, and ask for local completion. These are instructions to the model, not reversible substitution. Numbered pseudonyms and user-requested reversible substitution are planned for 1.9; neither ships in 1.8.0.
 
 Customer, order and ticket IDs, dates, e-mail subjects and **person names in tool results** stay readable. Work by ID, then look up the address in your own system. Source files remain unchanged, and Scout does not prevent an agent from transferring a file it can read. [Data handling and security scope](docs/SECURITY.md).
 
+## What leaves the device
+
+Hermes sends the resulting request to its configured model provider. This table
+assumes Scout masking is on; detection is incomplete and values it misses leave
+unchanged. With masking off, all content passes unchanged. Names are off by default.
+
+| Data | User prompt | Tool / MCP result |
+|---|---|---|
+| E-mail, PESEL/SSN IDs, IBAN, card | Detected values masked | Detected values masked |
+| Phone / street address | Detected values masked; addresses can be off | Same address/language switches |
+| Secrets / codes / PINs | Detected values masked | Detected values masked |
+| EN names | Unchanged by default; basic/deep opt-in | Unchanged |
+| PL names | Unchanged by default; basic/deep opt-in, incomplete | Unchanged |
+| Names / addresses in other languages | Names require opt-in; both skipped in recognized foreign paragraphs unless other_languages on | Names unchanged; addresses use the same language switch |
+| Images and other non-text content | Passed through unscanned | Passed through unscanned |
+
+Customer/order/ticket IDs and dates stay readable. Discord thread titles may
+contain a name even with user-name masking on. Optional basal on loopback receives
+unmasked candidate lines; it is a separate local recipient, not the provider.
+
+## Name, address and language options
+
+Name masking is optional (default `off`) and applies only to user-role prompt text; names in tool results stay readable so the model can sort mail and documents by person. `/scout names basic` masks full names, titles with a surname, repeats and “Surname, Name” pairs; `deep` also masks single names with contextual evidence and is noisy on Polish text (≈49 false names per 100 PL texts). Addresses are on by default. Recognized DE/FR/ES/IT paragraphs skip names and addresses unless `other_languages` is on; structured data runs in every language, and short foreign text can remain uncertain. Names are off by default because structured data is where leaks do concrete harm, while names are often what the user wants the model to see.
+
+See [all options, English routing and migration from 1.7.5](docs/CONFIGURATION.md#masking-options-and-migration-from-175).
+
 ## What ships, and what is still experimental
 
-- **Masking — the core.** Local detectors and placeholders on supported Hermes text paths, including MCP output. Enabled through consent, independently of triage.
+- **Masking — the core.** Local detectors and placeholders on supported Hermes text paths, including MCP output. Enabled by default when the plugin is enabled on a fresh profile, independently of opt-in triage.
 - **Injection flags — in this release.** Suspicious instructions remain visible as content, with an alert for the model. Detection has misses and false alarms.
 - **Local triage — optional, needs calibration.** A classifier trained on your labelled tickets classifies routine tickets locally and returns the category label as the reply, with **0 main-call tokens**; uncertain cases go to the model. Hermes title calls may still run. The shortcut supports chat completions; Codex Responses always forwards to the model. Writing-style changes and typos can invalidate a fitted threshold.
 - **basal — optional local engine.** Zero-shot triage through a basal engine you install and run on loopback, with its threshold calibrated on your validation data. It takes seconds per ticket, so in-turn local answers forward rather than wait. The same engine can confirm uncertain password candidates during masking (at most 8 s in total per tool result or provider request; after that, or if it fails, only the deterministic threshold applies). The triage cascade and learning-from-basal results are offline experiments outside this release.
@@ -47,9 +70,9 @@ alias scout="bash ~/.hermes/plugins/local-scout/scout.sh"
 scout
 ```
 
-`scout` opens a menu: masking on (recommended), Scout off, mode, local triage from a labelled file, and Insights. Every step explains what it enables and asks before changing anything. Start a new Hermes session afterwards. Add the alias line to `~/.bashrc` or `~/.zshrc` to keep it; `HERMES_HOME=/path/to/profile scout` selects another profile.
+`scout` (or `hermes scout`) opens the setup screen: arrows or j/k select, Enter/Space change, `s` saves, `q`/Esc ask before discarding changes. Saved settings apply from the next message; only the masking system-prompt section needs a new session. In chat, `/scout` shows status, `/scout details` the measurement table, and `/scout names basic` or `/scout masking off` changes one setting; changes are accepted only from a local session, never from messaging gateways, and these commands are not model tools. Add the alias to `~/.bashrc` or `~/.zshrc`; `HERMES_HOME=/path/to/profile scout` selects another profile. [Terminal fallback, profiles and commands](docs/CONFIGURATION.md).
 
-The same steps as commands, for scripts (the menu prints them too):
+Optional Insights and triage setup for scripts (basic masking already works without these commands):
 
 ```sh
 scout configure --mode report --dataset profile --approve observe,report,insights,mask
@@ -58,31 +81,39 @@ scout insights
 scout configure --mode off
 ```
 
-`--approve` replaces the whole grant map, so list every scope you want. `setup-triage` also enables local answers. `--mode off` disables Scout; retained data remains. For triage, use labelled examples without personal information and review the validation coverage/error curve. [Setup, profiles and local-answer configuration](docs/CONFIGURATION.md).
+`--approve` replaces the whole grant map, so list every scope you want. `setup-triage` changes the mode to `on_demand` and also enables local answers; it does not keep the preceding `report` mode. `--mode off` disables Scout; retained data remains. For triage, use labelled examples without personal information and review the validation coverage/error curve. [Setup, profiles and local-answer configuration](docs/CONFIGURATION.md).
 
 ## Evidence you can inspect
 
-- **Masking:** on the Gretel synthetic PII test, span recall was 100% for e-mails, 96% for cards, 94% for SSNs and 88% for phones. Complete address masking was 75.2%; prompt-name token recall/precision was 95.7%/67.9%. These are dataset measurements. [Detector evaluation](docs/EVIDENCE.md#content-safety).
-- **Speed and integration:** masking a 331-character e-mail took a median below 1 ms on a laptop CPU (warm). 300 unit tests and 33/33 contract cases per seed with live Hermes lifecycle checks, bound to the tested plugin file tree; `hermes plugins validate --install-deps` passes. These are distinct checks, not end-to-end latency guarantees. [Reliability](docs/EVIDENCE.md#reliability).
-- **Passwords:** on the Gretel test split, which was not used to choose thresholds, 50 of 59 passwords were masked without basal (13 of 59 before password-like detection). Outside labelled entities it masked 3 tokens in 5,000 documents, all of them unlabelled credentials (a one-time code, a verification code, `admin123`). On 1,506 technical Q&A texts (TechQA) it masked nothing; on 1,100 tool-call results 11 tokens, each a credential on inspection (`Password: securePass123`, `auth_token`); on 356 of Hermes' own source and documentation files 2 tokens. With the optional basal pico second opinion, 52 of 59 passwords were masked, for 1 more false token. [Thresholds and the basal second opinion](docs/EVIDENCE.md#passwords-and-pins).
-- **Injection:** recall was 97% on Gandalf and 57% on deepset, with false positives up to 2% on the reported negative sets. [Scope and datasets](docs/EVIDENCE.md#content-safety).
-- **Triage savings:** a paired 20-message benchmark measured 18.8–19.4% fewer **main-call tokens** on supported chat providers; title calls reduced the overall saving, and Codex Responses showed no saving. Small runs do not establish statistical significance or predict your workload. [Measured savings](docs/EVIDENCE.md#measured-savings).
+The 1.8.0 frozen holdout contains 1,503 synthetic texts built without access to the code. Counts below are fully masked values; false alarms are separate. Counts are from the release; the English title fix and the removal of a small Polish given-name list were measured after the blind run (see EVIDENCE, measurement stages). They are sample results, not protection guarantees.
+
+| Category | 1.7.5 fully masked | 1.8.0 fully masked | Traps with this false mask, 1.7.5 → 1.8.0 |
+|---|---:|---:|---:|
+| E-mail | 200/200 | 200/200 | 26/50 → 26/50 |
+| PESEL | 200/200 | 200/200 | 0/50 → 0/50 |
+| Card | 195/200 | 195/200 | 4/50 → 4/50 |
+| SSN | 197/200 | 197/200 | 0/50 → 0/50 |
+| IBAN | 187/200 | 187/200 | 0/50 → 0/50 |
+| Phone | 106/200 | 165/200 | 4/50 → 6/50 |
+| Secret | 125/200 | 136/200 | 4/50 → 4/50 |
+| Address | 55/200 | 114/200 | 1/50 → 5/50 |
+
+With names turned on, `basic` fully masked 255/319 English and 112/191 Polish full names (1.7.5: 175/319 and 37/191) with 3.7 and 6.0 false `[NAME]` per 100 texts (1.7.5: 23.5 and 63.6); `deep` masked 505/793 English and 247/410 Polish name mentions with 8.4 and 48.7 false names per 100 texts.
+
+The holdout exposed a basic-mode English title bug: 10/94 titled mentions in the blind run on the first release candidate, then 79/94 after the fix of English titled names and a re-run on the release candidate. The corrected title result is no longer blind; the later removal of a Polish given-name list lowered PL full names from 123/191 to 112/191; other counts stayed the same. International addresses remain a gap (0/28 in DE/FR/ES/IT with either language setting), and 26/50 technical e-mail traps are masked. [Full tables, definitions and protocol](docs/EVIDENCE.md#180-frozen-holdout), [how detection works](docs/EVIDENCE.md#how-detection-works-and-how-we-measure-it). Earlier injection, triage, speed and integration measurements remain in the explicitly historical sections of EVIDENCE.
 
 ## Limits and disclosures
 
-- English only, with US-first phone and address formats plus IBAN and PESEL. Name detection covers capitalised ASCII forms; dates, including dates of birth, remain readable. Images and binary content are not scanned.
+- English and Polish formats are supported to different degrees, including US-first and some Polish phone and address formats. Coverage is incomplete. Dates, including dates of birth, remain readable. Images and other non-text content are passed through unscanned, with an `unscanned=image` (or audio/file/other type) alert on supported user/tool paths. Text blocks in the same message are still masked; text scan failures and oversized text still follow `guard_mode`.
 - Passwords are recognised by shape and cues, not meaning: plain-word passphrases (`correct horse battery staple`), values over 20 characters without a known key format, short or simple values without a cue and digit codes without a word such as "PIN", "OTP" or "verification" stay visible, and in terminal output a value needs a cue. Some IDs and usernames that look like passwords are masked.
-- Numbers with a check digit are masked only when it is valid: cards pass the Luhn checksum (or carry a label such as "card number", "credit card" or "Visa"), IBANs mod 97, PESEL numbers their checksum and date; SSNs must follow issuance rules (no 000, 666 or 9xx area). This keeps order and tracking numbers readable, but made-up test values such as `1111 0000 4444 5555` stay visible. For tests, use valid samples such as card `4111 1111 1111 1111` or IBAN `DE89 3704 0044 0532 0130 00`.
-- Consent and compatible Hermes middleware are required. Scan failures withhold user content by default; system prompts are kept (data split across text blocks is merged into one masked block), and only a failure of the whole masking step replaces the request (fail-closed); `scout configure --guard-mode open` is the explicit, per-profile fail-open option. If a Hermes middleware call itself fails, Hermes continues with the original request, and safe-worker mode can bypass plugins. Auxiliary masking is best effort: verify outgoing payloads for your deployment.
+- Numeric detection combines validators and context: cards pass Luhn unless an explicit payment/card label admits them; IBANs use supported country lengths and mod 97; PESEL uses its checksum and calendar validation, with explicit-label and legacy-fixture exceptions for damaged dates. SSNs exclude invalid area/group/serial values (including 000, 666 or 9xx area). This keeps order and tracking numbers readable, but made-up test values such as `1111 0000 4444 5555` stay visible. For tests, use valid samples such as card `4111 1111 1111 1111` or IBAN `DE89 3704 0044 0532 0130 00`.
+- Compatible Hermes middleware and an enabled mode with profile masking permission are required (enabled by default on a fresh profile). Scan failures withhold user content by default; system prompts are kept (data split across text blocks is merged into one masked block), and only a failure of the whole masking step replaces the request (fail-closed); `scout configure --mode report --guard-mode open` is the explicit, per-profile fail-open option. If a Hermes middleware call itself fails, Hermes continues with the original request, and safe-worker mode can bypass plugins. Auxiliary masking is best effort: verify outgoing payloads for your deployment.
 - On Discord, Hermes names a new thread after its first message and copies that title into the system prompt. Detected values are masked there too, but person names are not. [Operational caveats](docs/SECURITY.md#auxiliary-calls-and-prompt-privacy-hermes-023).
-- Scout makes no network calls except optional basal requests to loopback for triage and uncertain password candidates (no proxies, no redirects). It reads content Hermes passes to plugin hooks and middleware, the selected profile's `config.yaml` (title settings), and history files you name. State stays in its plugin-data directory (the `scout` launcher adds one link under `~/.cache/local-scout`). It runs no shell commands, starts no background processes and stores no provider credentials. Local training artifacts can retain vocabulary; protect them separately from the narrower Insights export. [Full disclosures](docs/SECURITY.md#disclosures).
+- Scout makes no network calls except optional basal requests to loopback for triage and uncertain password candidates (no proxies, no redirects). The basal engine receives unmasked candidate lines and, for a confirmed candidate, neighbouring lines. It reads content Hermes passes to plugin hooks and middleware, the selected profile's `config.yaml` (title settings), and history files you name. State stays in its plugin-data directory (the `scout` launcher adds one link under `~/.cache/local-scout`). It runs no shell commands, starts no background processes and stores no provider credentials. Local training artifacts can retain vocabulary; protect them separately from the narrower Insights export. [Full disclosures](docs/SECURITY.md#disclosures).
 
 ## What's next?
 
-Local Scout is the fast first layer of a planned decision cascade: Scout handles confident cases, basal takes harder ones, and the LLM remains the fallback.
-In offline experiments, basal also acts as a teacher, providing high-confidence labels to improve Scout. The goal is to gradually shift more decisions to the lightweight local model while maintaining measurable, calibrated error rates.
-Longer term, the project aims to support multimodal decision-making, including text, images, and audio.
-The triage cascade, teacher loop, and multimodal capabilities are not part of this release; password masking already uses basal as an optional second opinion.
+Numbered masks with local, reversible substitution are planned for 1.9. The triage cascade, teacher loop and multimodal work are experiments outside 1.8.0; see [historical evidence](docs/EVIDENCE.md#triage-on-real-data-basal-and-the-cascade-measured-offline).
 
 ## How it was built
 

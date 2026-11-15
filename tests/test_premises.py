@@ -114,7 +114,7 @@ class ToolContract(unittest.TestCase):
             register(ctx)
         # Hermes 0.23.0 does not know a provides_skills field ('unknown manifest field'); register() registers the skill.
         self.assertNotIn('provides_skills',manifest)
-        self.assertEqual({'decide'},set(ctx.skills))
+        self.assertEqual({'decide', 'masking'},set(ctx.skills))
 
     def test_choice_requires_separate_training_and_does_not_pick_another_method(self):
         with tempfile.TemporaryDirectory() as tmp:

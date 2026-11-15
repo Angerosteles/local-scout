@@ -7,24 +7,30 @@ import sys
 
 from .scout.context import LocalContext
 from .scout.core import Scout
-from .scout import storage
+from .scout import storage, menu
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog='scout')
     ap.add_argument('--home', type=Path, help='Explicit Hermes profile; alternatively HERMES_HOME, never implicit default')
     sub = ap.add_subparsers(dest='command')
-    sub.add_parser('menu', help='Interactive menu: masking on/off, mode, local triage, Insights')
+    sub.add_parser('menu', help='Edit settings interactively, then Save or Cancel')
+    sub.add_parser('setup', help='Edit settings interactively, then Save or Cancel')
     conf = sub.add_parser('configure')
     conf.add_argument('--mode', choices=['off','background','report','on_demand'],
                       help='Required unless run in a terminal, where omitting it opens the menu')
     conf.add_argument('--dataset', default='demo_a')
     conf.add_argument('--source', type=Path)
     conf.add_argument('--synthetic-pii', action='store_true', help='Mask locally detected PII in this explicitly synthetic dataset')
-    conf.add_argument('--approve', default=None, help='Explicit comma-separated observe,report,train,mask,insights,answer; scope@dataset targets another dataset (e.g. mask@profile); absent preserves grants')
+    conf.add_argument('--approve', default=None, help='Explicit comma-separated observe,report,train,mask,insights,answer; scope@dataset targets another dataset (e.g. mask@profile); scope@ keeps an empty grant; absent preserves grants')
+    conf.add_argument('--insights', choices=['on', 'off'], default=None,
+                      help='Persist counters only with observation consent; off saves an explicit opt-out')
     conf.add_argument('--answer-task', choices=['triage'], default=None)
     conf.add_argument('--answer-marker', default=None)
     conf.add_argument('--basal-url', default=None, help='Local basal engine, e.g. http://127.0.0.1:8765 (loopback only); empty string removes it')
+    conf.add_argument('--name-masking', choices=['off', 'basic', 'deep'], default=None)
+    conf.add_argument('--other-languages', choices=['off', 'on'], default=None)
+    conf.add_argument('--address-masking', choices=['off', 'on'], default=None)
     conf.add_argument('--guard-mode', choices=['closed', 'open'], default=None,
                       help='Scan-failure policy for this profile: closed (default) withholds content that could not be scanned; open passes it through unmasked')
     conf.add_argument('--basal-descriptions', type=Path, default=None, help='Optional JSON file {label: one-line description} for basal')
@@ -83,11 +89,15 @@ def main(argv=None):
         ap.error('Provide --home or HERMES_HOME; there is no default profile.')
     scout = Scout(LocalContext(home.resolve()))
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
-    if args.command in (None, 'menu') or (args.command == 'configure' and args.mode is None):
+    if args.command in (None, 'menu', 'setup') or (args.command == 'configure' and args.mode is None):
         if not interactive:
-            ap.error('--mode is required' if args.command == 'configure' else 'choose a command (the menu needs a terminal)')
-        from .scout.menu import run as menu
-        menu(scout, home)
+            if args.command == 'configure':
+                ap.error('--mode is required')
+            from .scout.menu import non_tty
+            non_tty(scout)
+            return
+        from .scout.menu import run as run_menu
+        run_menu(scout, home)
         return
     try:
         if args.command == 'setup-triage':
@@ -115,17 +125,22 @@ def main(argv=None):
                 grants = {}
                 for item in (s.strip() for s in args.approve.split(',')):
                     if item:
-                        scope, _, dataset = item.partition('@')
+                        scope, separator, dataset = item.partition('@')
                         targets = grants.setdefault(scope, [])
+                        if separator and not dataset:
+                            continue
                         if (dataset or args.dataset) not in targets:
                             targets.append(dataset or args.dataset)
             descriptions = json.loads(args.basal_descriptions.read_text(encoding='utf-8')) if args.basal_descriptions else None
             scout.configure_local(args.mode, grants=grants, sources={args.dataset:args.source} if args.source else None,
                                   synthetic_pii=args.synthetic_pii, answer_task=args.answer_task,
                                   answer_marker=args.answer_marker, basal_url=args.basal_url, basal_descriptions=descriptions,
-                                  guard_mode=args.guard_mode)
+                                  guard_mode=args.guard_mode, name_masking=args.name_masking, address_masking=args.address_masking,
+                                  other_languages=args.other_languages,
+                                  persist_observation=None if args.insights is None else args.insights == 'on')
             result = dict(status='CONFIGURED', mode=args.mode,
                           effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())
+            result.update(name_masking=scout.profile()['config'].get('name_masking', 'off'), address_masking=scout.profile()['config'].get('address_masking', 'on'), other_languages=scout.profile()['config'].get('other_languages', 'off'))
             if scout.profile()['config'].get('guard_mode') == 'open':
                 result['guard_notice'] = ('guard_mode=open: content that cannot be scanned is passed through unmasked '
                                           'for this profile. Restore the default with --guard-mode closed.')
@@ -139,7 +154,7 @@ def main(argv=None):
             decisions_path = scout.root()/'decisions.json'
             entries = storage.read_json(decisions_path) if decisions_path.is_file() else []
             outcome = next((e.get('outcome') for e in reversed(entries) if (e.get('outcome') or {}).get('validation_curve')), None)
-            print(json.dumps(dict(mode=config['mode'], grants=config.get('grants',{}),
+            print(json.dumps(dict(mode=config['mode'], insights=menu.state_for(scout)['insights'], name_masking=config.get('name_masking', 'off'), address_masking=config.get('address_masking', 'on'), other_languages=config.get('other_languages', 'off'), grants=config.get('grants',{}),
                                   effective_scope=config.get('grants',{}), title_risk=scout.title_risk(), validation_curve=outcome.get('validation_curve') if outcome else None)))
         elif args.command == 'delete':
             if not args.confirm_delete:

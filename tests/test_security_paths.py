@@ -198,13 +198,16 @@ class PromptGuardRegressionTests(unittest.TestCase):
         thinking = {'role': 'assistant', 'content': [{'type': 'thinking', 'thinking': 'plan', 'signature': 's'}, {'type': 'text', 'text': 'hi'}]}
         self.assertIsNone(self.guard(request={'messages': [{'role': 'user', 'content': 'hi'}, thinking]}, api_mode='x'))
 
-    def test_system_prompt_never_withheld_and_user_images_fail_closed(self):
+    def test_system_prompt_never_withheld_and_user_images_pass_unscanned(self):
         big_system = {'role': 'system', 'content': 'x' * (300 * 1024)}
         out = self.guard(request={'messages': [big_system, {'role': 'user', 'content': 'mail a@example.com'}]}, api_mode='chat_completions')
         self.assertEqual(out['request']['messages'][0], big_system)
         image = {'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'}}]}
         out = self.guard(request={'messages': [image]}, api_mode='chat_completions')
-        self.assertIn('withheld', str(out['request']['messages'][0]))
+        content = out['request']['messages'][0]['content']
+        self.assertEqual(content[0], image['content'][0])
+        self.assertIn('unscanned=image', content[-1]['text'])
+        self.assertNotIn('withheld', str(content))
 
     def test_injection_rules_normalise_unicode(self):
         from plugin.scout import tool_guard

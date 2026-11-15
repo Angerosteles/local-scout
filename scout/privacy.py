@@ -2,19 +2,19 @@
 import re
 from datetime import date
 
-from . import credentials, pii_model
+from . import credentials, language, pii_model
 
 # Regex detectors. Phones, cards, SSNs and addresses come from the context model in pii_model.
 PATTERNS = {
     "pesel": re.compile(r"(?<!\d)\d{11}(?!\d)"),
-    "email": re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b"),
-    "secret": re.compile(r"(?i)(?:\bsk-[\w-]{6,}|\b(?:api[_-]?key|password|token|secret)\s*[:=]\s*(?!true\b|false\b|null\b|none\b|\d+\b)(?![^\s]*\()\S{6,})"
+    "email": re.compile(r"(?i)(?<![A-Z0-9._%+-])\b[A-Z0-9._%+-]{1,64}@(?=[A-Z0-9.-]{1,255}(?![A-Z0-9.-]))[A-Z0-9.-]{1,252}\.[A-Z]{2,63}\b"),
+    "secret": re.compile(r"(?i)(?:\bsk-[\w-]{6,}|\b(?:api[ _-]?key|password|token|secret)\s*[:=]\s*(?!true\b|false\b|null\b|none\b|\d+\b)(?![^\s]*\()\S{6,})"
                         # Well-known credential formats (high-precision prefixes) and bearer tokens / private key blocks.
                         r"|\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,}"
                         r"|\bgh[pousr]_[A-Za-z0-9]{30,}|\bgithub_pat_[A-Za-z0-9_]{40,}"
                         r"|\b(?:AKIA|ASIA)[0-9A-Z]{16}\b|\bxox[abprs]-[A-Za-z0-9-]{10,}|\bAIza[0-9A-Za-z_-]{35}"
                         r"|\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"
-                        r"|(?i:\bbearer)\s+[A-Za-z0-9._~+/-]{20,}=*"
+                        r"|(?i:\bbearer)\s+[^\s,;]{20,}"
                         r"|-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)"),
     # Card verification code: only next to an explicit keyword; the span covers the digits only.
     "cvv": re.compile(r"(?i)\b(?:cvv2?|cvc2?|cid|csc|security\s+code|card\s+verification(?:\s+(?:code|value))?)\b\s*(?:code|number|no\.?)?\s*[:#=]?\s*(?P<cvv>\d{3,4})\b")}
@@ -39,16 +39,17 @@ IBAN_LENGTHS = {'PL':28,'DE':22,'GB':22,'FR':27,'ES':24,'IT':27,'NL':18,'BE':16,
 # over the adjoining unit / postcode / city / state segments so the whole address is masked
 # (Gretel test full coverage was 35.8%). Bounded: at most four segments, only after ", " (or a space
 # before a postcode/state), Title-case place names of up to four words.
-_ADDR_UNIT = r"(?:Apt\.?|Apartment|Suite|Ste\.?|Unit|Flat|Floor|Fl\.|Room|Rm\.?|#|H\.?\s?No\.?|No\.)\s*[A-Za-z0-9-]{1,8}"
-_ADDR_POST = r"(?:\d{3,6}(?:-\d{4})?|[A-Z]\d[A-Z]\s?\d[A-Z]\d|[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2})"
+_ADDR_UNIT = r"(?:Apt\.?|Apartment|Suite|Ste\.?|Unit|Flat|Floor|Fl\.|Room|Rm\.?|#|H\.?\s?No\.?|No\.)\s*[A-Za-z0-9/-]{1,8}"
+_ADDR_POST = r"(?:[A-Z]{1,2}\d[A-Z\d]?\s?\d[A-Z]{2}|[A-Z]\d[A-Z]\s?\d[A-Z]\d|\d{3,6}(?:-\d{4})?)(?![A-Za-z0-9-])"
 _ADDR_FIELD_LABELS = r"(?!(?:Secret|Token|Password|Passcode|Card|Credit|Phone|Mobile|Email|E-mail|SSN|Name|Account|Number|Key|Api|IBAN|Pin|Dob|Date)\b)"
-_ADDR_PLACE = _ADDR_FIELD_LABELS + r"(?:(?:[A-Z]{2,3}\s)?[A-Z][a-z'\-]+)(?:\s[A-Z][a-z'\-]+){0,3}(?:\s(?:[A-Z]{2,3}))?(?:\s" + _ADDR_POST + r")?|[A-Z]{2}\b"
-_ADDR_NEXT = re.compile(r"(?:,\s?(?:" + _ADDR_UNIT + "|" + _ADDR_POST + "|" + _ADDR_PLACE + r")|\s(?:" + _ADDR_UNIT + "|" + _ADDR_POST + r"))")
+_ADDR_PLACE = _ADDR_FIELD_LABELS + r"(?:(?:[A-Z]{2,3}\s)?[A-Z][a-z'\-]+)(?:\s[A-Z][a-z'\-]+){0,3}(?:\s(?:[A-Z]{2,3})(?![A-Za-z0-9]))?(?:\s" + _ADDR_POST + r")?|[A-Z]{2}\b"
+_ADDR_LINE = r"[A-Z][a-z'\-]+(?:[ \t]+[A-Z][a-z'\-]+){0,3}(?:,?[ \t]+[A-Z]{2})?[ \t]+" + _ADDR_POST
+_ADDR_NEXT = re.compile(r"(?:,[ \t]*(?:" + _ADDR_UNIT + "|" + _ADDR_POST + "|" + _ADDR_PLACE + r")|[ \t]+(?:" + _ADDR_UNIT + "|" + _ADDR_POST + r")|\r?\n[ \t]*(?:" + _ADDR_LINE + r"))")
 _ADDR_PREV = re.compile(r"(?:" + _ADDR_UNIT + r"),?\s?$")
 _ADDR_KEYWORD_PREV = re.compile(r"(?:Apt\.?|Apartment|Suite|Studio|Ste\.?|Unit|Flat|Room|H\.?\s?No\.?)\s?$")
 _ADDR_TOKEN_TAIL = re.compile(r"[A-Za-z0-9]+(?:\s\d[A-Z]{2}\b)?")
 _ADDR_UNIT_NUMBER = re.compile(r"\.?\s?(?:H\.?\s?No\.?\s?)?[A-Za-z0-9][A-Za-z0-9/\-]{0,7}")
-_ADDR_ENDS_WITH_UNIT = re.compile(r"(?:Apt|Apartment|Suite|Studio|Unit|Flat|Room)\.?$")
+_ADDR_ENDS_WITH_UNIT = re.compile(r"(?:Apt|Apartment|Suite|Studio|Unit|Flat|Room|H\.?No)\.?$")
 _ADDR_STREET_PREV = re.compile(r"\d{1,6}\s[A-Z][a-z]+(?:\s[A-Za-z]+){0,3},\s?$")
 
 
@@ -80,17 +81,39 @@ def _extend_address(text, start, stop):
     return start, stop
 
 
+def _secret_placeholder(value):
+    """Reject explicit template syntax; ordinary password-like values remain protected."""
+    value = re.sub(r'(?i)^(?:(?:api[ _-]?key|password|token|secret)\s*[:=]\s*|bearer\s+|sk-)', '', value)
+    value = value.strip('"\'`')
+    return bool(re.fullmatch(r'YOUR_[A-Z_]+|(?i:REDACTED|X{3,})'
+                            r'|<[A-Z_][A-Z_ -]*>'
+                            r'|<(?i:token|api[_-]?key|password|secret|value|redacted)>'
+                            r'|\$\{(?:[A-Z_]+|[a-z_]+)\}|\{\{(?:[A-Z_]+|[a-z_]+)\}\}', value))
+
+
+_SPLIT_KEY = re.compile(r"(?P<quote>[\"'])(?P<head>(?:sk-|gh[pousr]_)[A-Za-z0-9_-]{1,256})[ \t]*\r?\n"
+                        r"[ \t]*(?P<tail>[A-Za-z0-9_-]{1,256})(?P=quote)")
+
+
 def spans(text):
     result = []
     has_digit = bool(re.search(r'\d', text))
     lowered = text.lower()
-    has_secret_hint = any(hint in lowered for hint in ('sk-', 'api_key', 'api-key', 'apikey', 'password', 'token', 'secret', '_live_', '_test_', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'akia', 'asia', 'xox', 'aiza', 'eyj', 'bearer', 'private key'))
+    has_secret_hint = any(hint in lowered for hint in ('sk-', 'api_key', 'api-key', 'api key', 'apikey', 'password', 'token', 'secret', '_live_', '_test_', 'ghp_', 'gho_', 'ghu_', 'ghs_', 'ghr_', 'github_pat_', 'akia', 'asia', 'xox', 'aiza', 'eyj', 'bearer', 'private key'))
     for category, pattern in PATTERNS.items():
         if category == 'email' and '@' not in text or category == 'pesel' and not has_digit:
             continue
         if category == 'secret' and not has_secret_hint:
             continue
         for match in pattern.finditer(text):
+            if category == 'secret' and _secret_placeholder(match.group()):
+                continue
+            if category == 'secret' and re.fullmatch(r'(?i)(?:token|password|secret|api[ _-]?key)\s*[:=]\s*<[^<>,\s]+,', match.group()):
+                if re.fullmatch(r'(?i)token\s*=\s*<token,', match.group()) and re.match(r'[ \t]*see[ \t]+\[RFC\d+\](?:,[ \t]*Section[ \t]+[\d.]+)?[ \t]*>', text[match.end():]):
+                    continue  # RFC ABNF production, rather than a credential assignment.
+                tail = re.match(r'[^<>\r\n]{1,128}>', text[match.end():match.end()+129])
+                result.append((match.start(), match.end() + (tail.end() if tail else 0), category))
+                continue
             if category == "iban":
                 country = match.group('iban')[:2].upper()
                 length = IBAN_LENGTHS.get(country)
@@ -127,6 +150,11 @@ def spans(text):
                     if not value.startswith('000000') and not re.search(r'(?i)\bpesel\s*[:=#]?\s*$',text[max(0,match.start()-24):match.start()]):
                         continue
             result.append((*match_span, category))
+    if has_secret_hint:
+        for match in _SPLIT_KEY.finditer(text):
+            joined = match['head'] + match['tail']
+            if PATTERNS['secret'].fullmatch(joined) and not _secret_placeholder(joined):
+                result.append((*match.span(), 'secret'))
     result.extend(pii_model.spans(text))
     result = [(*_extend_address(text, s, e), c) if c == 'address' else (s, e, c) for s, e, c in result]
     merged = []
@@ -137,6 +165,27 @@ def spans(text):
         else:
             merged.append((start, stop, category))
     return merged
+
+
+def local_spans(text, names=False, name_masking="basic", address_masking="on", other_languages="off"):
+    """Resolve complete person spans inside addresses without reducing mask coverage."""
+    if name_masking not in ("off", "basic", "deep") or address_masking not in ("off", "on") or other_languages not in ("off", "on"):
+        raise ValueError("invalid masking setting")
+    found = spans(text) + credentials.spans(text)
+    found = [(s,e,c) for s,e,c in found if c != 'secret' or not _secret_placeholder(text[s:e])]
+    if address_masking == 'off':
+        found = [x for x in found if x[2] != 'address']
+    elif other_languages == 'off':
+        from . import language
+        other = [(start, start + len(part)) for start, part in language.paragraphs(text)
+                 if language.paragraph_language(part) == 'other']
+        found = [(s, e, c) for s, e, c in found if c != 'address' or not any(a <= s < b for a, b in other)]
+    if names and name_masking != 'off':
+        from . import name_model
+        addresses = [(s,e) for s,e,c in found if c == 'address']
+        found += [(s,e,c) for s,e,c in name_model.prompt_spans(text, mode=name_masking, other_languages=other_languages)
+                  if not any(a <= s and e <= b for a,b in addresses)]
+    return found
 
 
 def categories(text):
@@ -178,14 +227,17 @@ def _field_probe(field):
     """'cvv: ' for a JSON field named cvv: the name becomes context for every detector, never part of a mask."""
     if not isinstance(field, str) or not field:
         return ''
-    return re.sub(r'[^A-Za-z0-9 -]', ' ', field.replace('_', ' '))[:64].strip() + ': '
+    return ' '.join(re.sub(r'[^A-Za-z0-9 -]', ' ', field[:64]).split()) + ': '
 
 
-def mask_local_details(text, names=False, field=None):
+def mask_local_details(text, names=False, field=None, name_masking="basic", address_masking="on", other_languages="off"):
     """Mask detected PII. names=True adds the person-name detector (used for user prompts; see name_model).
     field: name of the JSON field the text came from ({"cvv": "402"}, {"otp_code": 543918}); it is detection
     context only, so the field name itself is never masked or changed."""
+    if name_masking not in ("off", "basic", "deep") or address_masking not in ("off", "on") or other_languages not in ("off", "on"):
+        raise ValueError("invalid masking setting")
     token = pii_model._CANDIDATE_BUDGET.set(pii_model.MASK_CANDIDATE_LIMIT)
+    cache_token = language.CACHE.set({}) if language.CACHE.get() is None else None
     try:
         # zero-width characters, full-width forms and Unicode hyphens hid e-mails,
         # cards and phones from every detector. Detect on a normalised copy, then map spans back to the original.
@@ -193,10 +245,12 @@ def mask_local_details(text, names=False, field=None):
         probe = _field_probe(field)
         work = probe + clean
         # password-like values without a known format (source thresholds, optional basal check: see credentials)
-        found = spans(work) + credentials.spans(work)
-        if names:
-            from . import name_model
-            found = found + name_model.spans(work)
+        # Field context must not push an otherwise supported value past the name limit.
+        from . import name_model
+        separate_names = names and bool(probe) and len(clean) <= name_model.MAX_TEXT < len(work)
+        found = local_spans(work, names=names and not separate_names, name_masking=name_masking, address_masking=address_masking, other_languages=other_languages)
+        if separate_names and name_masking != 'off':
+            found += [(s + len(probe), e + len(probe), c) for s, e, c in name_model.prompt_spans(clean, mode=name_masking, other_languages=other_languages)]
         if probe:
             # a span reaching from the probe into the value ("cvv: 402") masks the value part only
             n = len(probe)
@@ -205,6 +259,8 @@ def mask_local_details(text, names=False, field=None):
             found = [(index[s], index[e - 1] + 1, c) for s, e, c in found if e > s]
         matches = sorted(found, key=lambda item: (item[0], -(item[1]-item[0])))
     finally:
+        if cache_token is not None:
+            language.CACHE.reset(cache_token)
         pii_model._CANDIDATE_BUDGET.reset(token)
     # overlapping spans of different categories are UNITED, never
     # dropped — skipping a later overlapping span leaked the rest of an e-mail, card or secret. The region is

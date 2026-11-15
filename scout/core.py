@@ -1,4 +1,4 @@
-"""Profile-scoped, opt-in Scout core. Agent tools cannot change consent or settings; only the operator CLI can."""
+"""Profile-scoped Scout core. Agent tools cannot change consent or settings; only the operator UI can."""
 from collections import Counter
 from datetime import datetime
 import importlib.util
@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 
-from . import basal, credentials, privacy, storage, decisions, tool_guard
+from . import basal, credentials, privacy, storage, decisions, tool_guard, insights
 from .profile import facts, GUIDE
 from .observer import extract
 from .calculator import calculate
@@ -67,7 +67,7 @@ class Scout:
         config_file = self.root() / 'settings.json'
         signature = (config_file.stat().st_mtime_ns, config_file.stat().st_size) if config_file.is_file() else None
         if key not in self.profiles:
-            config = storage.read_json(config_file) if config_file.is_file() else dict(mode='off', grants={}, sources={})
+            config = self._config(config_file)
             self.profiles[key] = dict(config=config, settings_signature=signature, seen={}, usage_seen={}, tool_seen={}, queries={}, events=[],
                                        usage=dict(input_tokens=None, output_tokens=None, quality='unknown'), notifications=[], notified={}, coverage={})
             aggregate = self.root() / 'aggregates.json'
@@ -81,12 +81,22 @@ class Scout:
             if signature is None:
                 self.profiles.pop(key)
                 return self.profile()
-            state['config'] = storage.read_json(config_file)
+            state['config'] = self._config(config_file)
             state['settings_signature'] = signature
         return state
 
+    @staticmethod
+    def _config(path):
+        config = dict(mode='report', grants={scope: ['profile'] for scope in ('observe', 'report', 'mask')}, sources={})
+        config['grants']['insights'] = []
+        saved = storage.read_json(path) if path.is_file() else {}
+        config.update(saved)
+        if 'grants' not in saved:
+            config.setdefault('persist_observation', False)
+        return config
+
     def configure_local(self, mode='off', grants=None, sources=None, retention_days=30, basal_url=None, basal_descriptions=None,
-                        synthetic_pii=False, answer_task=None, answer_marker=None, guard_mode=None):
+                        synthetic_pii=False, answer_task=None, answer_marker=None, guard_mode=None, name_masking=None, address_masking=None, other_languages=None, persist_observation=None):
         """Trusted local UI/CLI only; never registered as an agent tool."""
         mode = 'background' if mode == 'on' else mode
         if mode not in ('off', 'background', 'report', 'on_demand') or not 1 <= retention_days <= 30 or type(synthetic_pii) is not bool:
@@ -107,6 +117,15 @@ class Scout:
                 if set(grants)-{'observe', 'report', 'train', 'mask', 'insights', 'answer'} or any(not isinstance(v,list) or any(not ID.fullmatch(s) for s in v) for v in grants.values()):
                     raise ValueError
                 config['grants'] = grants
+                # Preserve legacy explicit grants, but save a separate opt-out for the new defaults.
+                if grants.get('insights') == [] or not (grants.get('observe') or grants.get('insights')):
+                    config['persist_observation'] = False
+                else:
+                    config.pop('persist_observation', None)
+            if persist_observation is not None:
+                if type(persist_observation) is not bool:
+                    raise ValueError('invalid persistence setting')
+                config['persist_observation'] = persist_observation
             if sources is not None:
                 approved = {}
                 for did, path in sources.items():
@@ -124,6 +143,13 @@ class Scout:
                     config['basal_url'] = basal.check_url(basal_url)
                 else:
                     config.pop('basal_url', None)
+            for key, value, choices in (('name_masking', name_masking, ('off', 'basic', 'deep')),
+                                        ('address_masking', address_masking, ('off', 'on')),
+                                        ('other_languages', other_languages, ('off', 'on'))):
+                if value is not None:
+                    if value not in choices:
+                        raise ValueError('invalid ' + key)
+                    config[key] = value
             if guard_mode is not None:
                 # Per-profile scan-failure policy: 'closed' (default) withholds what could not be scanned,
                 # 'open' passes it through unmasked. Stored here, never read from the process environment.
@@ -137,9 +163,8 @@ class Scout:
                 # Operator-written category descriptions; masked like any other text that may reach a model.
                 config['basal_descriptions'] = {label: privacy.mask_local_details(text)[0]
                                                 for label, text in basal.check_descriptions(basal_descriptions).items()}
-            # Setting off on a pristine plugin need not create any directory.
-            if mode != 'off' or self.root().exists():
-                storage.write_json(self.root() / 'settings.json', config)
+            # This is an explicit operator save, including off on a pristine profile.
+            storage.write_json(self.root() / 'settings.json', config)
             state['config'] = config
 
     def title_risk(self):
@@ -374,12 +399,13 @@ class Scout:
                         state['notifications'].append(dict(dataset_id=dataset, prompt_categories=warning))
                         state['notifications'] = state['notifications'][-100:]
                 if not additions:
-                    if len(state['events']) != previous_count:
+                    if len(state['events']) != previous_count and insights.collection_enabled(config):
                         storage.write_aggregates(self.root()/'aggregates.json', state['events'], now=self.clock())
                     return
                 state['events'].extend(dict(e,dataset_id=dataset) for e in additions)
                 state['events'] = state['events'][-10000:]
-                storage.write_aggregates(self.root()/'aggregates.json', state['events'], now=self.clock())
+                if insights.collection_enabled(config):
+                    storage.write_aggregates(self.root()/'aggregates.json', state['events'], now=self.clock())
                 if config['mode']=='report' and dataset in config.get('grants',{}).get('report',[]):
                     report = self._report([e for e in state['events'] if e.get('dataset_id')==dataset],dataset)
                     for alert in report['alerts']:
@@ -495,11 +521,15 @@ class Scout:
                     return None
                 event_id = secrets.token_hex(8)
                 context = credentials.CONTEXT.set(('terminal' if source == 'terminal' else 'text', basal.credential_checker(config)))
+                address = tool_guard.ADDRESS_MASKING.set(config.get('address_masking', 'on'))
+                other = tool_guard.OTHER_LANGUAGES.set(config.get('other_languages', 'off'))
                 guard = tool_guard.GUARD_OPEN.set(config.get('guard_mode') == 'open')
                 try:
                     replacement, categories, partial = tool_guard.transform(value, source, event_id)
                 finally:
                     tool_guard.GUARD_OPEN.reset(guard)
+                    tool_guard.ADDRESS_MASKING.reset(address)
+                    tool_guard.OTHER_LANGUAGES.reset(other)
                     credentials.CONTEXT.reset(context)
                 now = self.clock()
                 additions = []
@@ -523,7 +553,8 @@ class Scout:
                                                     source=source, event_id=item_id, dataset_id='profile'))
                     state['events'] = state['events'][-10000:]
                     try:
-                        storage.write_aggregates(self.root()/'aggregates.json', state['events'], now=now)
+                        if insights.collection_enabled(config):
+                            storage.write_aggregates(self.root()/'aggregates.json', state['events'], now=now)
                     except Exception:
                         # Masking is already computed; journal failure must not restore raw output.
                         pass
@@ -789,7 +820,8 @@ class Scout:
         counters = telemetry.setdefault(dataset, dict(handled_locally=0, abstained=0, estimated_tokens_avoided=0))
         counters['handled_locally' if accepted else 'abstained'] += 1
         counters['estimated_tokens_avoided'] += tokens
-        storage.write_json(telemetry_path, telemetry)
+        if insights.collection_enabled(state['config']):
+            storage.write_json(telemetry_path, telemetry)
         return dict(status='handled_locally' if accepted else 'abstained', decision_id=entry['decision_id'],
                     label=result.get('label') if accepted else None, document_id=result.get('document_id') if accepted else None,
                     matched_fields=result.get('matched_fields') if accepted else None, confidence=result.get('score'),
@@ -851,7 +883,8 @@ class Scout:
                 events.extend(self._event(dict(row,dataset_id=dataset_id),seen))
             return self._report(events,dataset_id)
         self._prune()
-        storage.write_aggregates(self.root()/'aggregates.json', self.profile()['events'], now=self.clock())
+        if insights.collection_enabled(self.profile()['config']):
+            storage.write_aggregates(self.root()/'aggregates.json', self.profile()['events'], now=self.clock())
         return self._report([e for e in self.profile()['events'] if e.get('dataset_id')==dataset_id],dataset_id)
 
     def require_unfrozen(self):

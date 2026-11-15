@@ -18,6 +18,7 @@ thresholds. A JSON field name reaches the detectors as a "name: " prefix added b
 Nothing here stores or logs text.
 """
 import bisect
+from collections import Counter
 import math
 import re
 import time
@@ -126,6 +127,34 @@ _SYNTAX = re.compile(r'^[A-Za-z_][\w.]*[\[(][\w.\[\](),:-]*$|^\d+[)\]:][\w.()\[\
                      r'|^0x[0-9A-Fa-f]+[)\]]+$')
 _INLINE_CODE = re.compile(r'^[([{]*(`{1,3})([^`]+)\1[.,;:)\]}\u2026]*$')
 _FIELD_NAME_END = re.compile(r'''["']\s*:''')
+_PREFIXED_TOKEN = re.compile(r'[a-z]{2,10}(?:_[a-z]{2,10})?_(?P<payload>[A-Za-z0-9]{16,})')
+_TELEGRAM_TOKEN = re.compile(r'[0-9]{8,10}:(?P<payload>[A-Za-z0-9_-]{28,})')
+_CONTEXT_TOKEN = re.compile(r'RCV-(?P<payload>[A-Za-z0-9]{12,})')
+_KEY_PREFIX = re.compile(r'(?:^|_)(?:sk|pk|rk|gh[pousr]|glpat|pat|whsec|npm|xox[abpr]|hmc|live|test|secret|key|tok|token|api|auth)(?=_)')
+_TOKEN_LABEL = re.compile(r'(?i)\b(?:key|token|secret|api)(?:[ \t]+(?:key|token))?[ \t]*$')
+
+
+def _random_payload(value):
+    """Require diverse, interleaved letters and digits; hashes and placeholders are not keys."""
+    if re.fullmatch(r'[0-9A-Fa-f]+', value) or not re.search(r'[A-Za-z][0-9]+[A-Za-z]|[0-9][A-Za-z]+[0-9]', value):
+        return False
+    counts = Counter(value)
+    return len(counts) >= 10 and -sum(n / len(value) * math.log2(n / len(value))
+                                    for n in counts.values()) >= 3.5
+
+
+def _formatted_secret(value, before):
+    """Long, delimited credential formats bypass the short-password length cap."""
+    bot = _TELEGRAM_TOKEN.fullmatch(value)
+    if bot:
+        return len(set(bot['payload'])) >= 10
+    match = _PREFIXED_TOKEN.fullmatch(value)
+    # Prefixed object IDs (evt_, ord_, inv_, trace_) stay readable: a generic prefix needs a key-like prefix or a key label.
+    if match and not _KEY_PREFIX.search(value[:match.start('payload')]) and not _TOKEN_LABEL.search(_near_context(before)):
+        match = None
+    if match is None and _TOKEN_LABEL.search(_near_context(before)):
+        match = _CONTEXT_TOKEN.fullmatch(value)
+    return bool(match and _random_payload(match['payload']))
 
 
 def _near_context(before):
@@ -309,8 +338,8 @@ def candidates(text):
     line_starts = None
     for match in _TOKEN.finditer(text):
         token = match.group()
-        # Fast path (C-level checks): plain words, short tokens and long blobs cannot score.
-        if token.isalpha() or len(token) < 4 or len(token) > MAX_LEN + 8:
+        # Long prefixed credentials are checked before the short-password length cap.
+        if token.isalpha() or len(token) < 4:
             continue
         digits_only = token.strip(_LEAD + _TRAIL).isdigit()
         if not digits_only and not _INTERESTING(token):
@@ -326,6 +355,9 @@ def candidates(text):
             line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
         line = bisect.bisect_right(line_starts, match.start()) - 1
         before = text[line_starts[line]:value_start]
+        if _formatted_secret(value, before):
+            yield value_start, end, 0.99, line, 'secret'
+            continue
         if value.isdigit():
             found = _code(value, before)
             if found:

@@ -2,6 +2,153 @@
 
 Part of the [Local Scout README](../README.md).
 
+## 1.8.0 frozen holdout
+
+Measurement stages: blind run on the first release candidate → fix of English titled names → re-run on the release candidate; comparison: 1.7.5. All quality counts in this section come from the supplied `HOLDOUT_WYNIKI_18.md`, not the development sets or the historical results below.
+
+The holdout was built by Gemini 4 Hydrogen without access to Local Scout's code and frozen on 14 November 2026: 1,503 synthetic texts, with 200 target values and 50 lookalike traps per category, plus 60 DE/FR/ES/IT texts. The stated target EN/PL split is 140/60, except PESEL 60/140 and SSN 180/20. Texts can contain multiple labelled mentions; mentions and texts are different denominators. The supplied summary identifies the frozen SHA-256 only by prefix `34cc60b3…`; obtain the full checksum and manifest with the holdout, published in a separate repository with the scoring script (link in the release notes), before reproducing it. The holdout itself is not shipped in the plugin.
+
+The initial blind evaluation was made once on the first release candidate, with no threshold tuning on the holdout. It exposed a basic-mode English title bug: **10/94** titled mentions fully masked. The fix of English titled names raised this to **79/94**. The corrected English title result is **no longer blind**. According to the supplied results, every other reported count is identical between those two runs. Do not describe the fixed candidate as an untouched blind evaluation, or reuse this exposed set as a new blind test.
+
+### Definitions
+
+- **Masked:** every letter/digit in a labelled span is covered by the union of detected masks. Punctuation and whitespace do not count. This measures full value coverage, not same-type precision: another category's mask may contribute.
+- **Partly:** at least one letter/digit is covered, including fully masked values. It is an inclusive count, not an additional disjoint group. A long address with only its street covered can be partly masked while still leaking information.
+- **Traps:** labelled lookalikes that should remain visible under the holdout's annotation policy. A trap-text false alarm means at least one mask of that target type overlaps no labelled value. Other genuine labelled values can occur in the text.
+- **Visible false masks:** detected spans overlapping no labelled value of any category. Rates are counts of these spans per 100 texts, not the percentage of texts affected and not the complement of precision. Several false masks can occur in one text. Counts use detector spans before rendering; overlapping or adjacent spans may be merged in the displayed mask.
+- **Names:** each person mention is scored separately: full name, titled surname (title excluded from gold), reversed “Surname, Name”, or single given name/surname in person context. Company names, places, works and street patrons are not person-name gold. Addresses are full deliverable blocks under the labelling rules, not just street names.
+- The `secret` evaluation groups secret values; it does not provide separate quality estimates for passwords, API keys, codes and PINs. CVV is not separately reported. The results measure local masking with names enabled, not Hermes hooks, injection resistance, optional basal confirmation or end-to-end provider payloads.
+
+### Structured categories (measured with names basic, addresses on, other languages off)
+
+| Category | 1.7.5 masked | 1.8.0 masked | 1.8.0 partly | Traps with a false mask of this type (1.7.5 → 1.8.0) |
+|---|---|---|---|---|
+| email | 200/200 (100%) | 200/200 (100%) | 200/200 | 26/50 → 26/50 |
+| pesel | 200/200 (100%) | 200/200 (100%) | 200/200 | 0/50 → 0/50 |
+| card | 195/200 (98%) | 195/200 (98%) | 195/200 | 4/50 → 4/50 |
+| ssn | 197/200 (98%) | 197/200 (98%) | 197/200 | 0/50 → 0/50 |
+| iban | 187/200 (94%) | 187/200 (94%) | 188/200 | 0/50 → 0/50 |
+| phone | 106/200 (53%) | 165/200 (82%) | 166/200 | 4/50 → 6/50 |
+| secret | 125/200 (62%) | 136/200 (68%) | 146/200 | 4/50 → 4/50 |
+| address | 55/200 (28%) | 114/200 (57%) | 158/200 | 1/50 → 5/50 |
+
+### Person names (all labelled mentions in EN and PL texts)
+
+| | 1.7.5 | 1.8.0 basic | 1.8.0 deep |
+|---|---|---|---|
+| EN all names | 445/793 | 369/793 | 505/793 |
+| EN full | 175/319 | 255/319 | 255/319 |
+| EN titled | 56/94 | 79/94 | 79/94 |
+| EN reversed | 19/71 | 27/71 | 32/71 |
+| EN single | 195/309 | 8/309 | 139/309 |
+| EN names unseen in earlier sets | 364/675 | 343/675 | 432/675 |
+| EN visible false `[NAME]` (973 texts) | 229 in 973 texts (23.5/100) | 36 (3.7/100) | 82 (8.4/100) |
+| PL all names | 119/410 | 176/410 | 247/410 |
+| PL full | 37/191 | 112/191 | 112/191 |
+| PL titled | 7/49 | 45/49 | 45/49 |
+| PL reversed | 3/35 | 13/35 | 14/35 |
+| PL single | 72/135 | 6/135 | 76/135 |
+| PL names unseen in earlier sets | 109/390 | 176/390 | 236/390 |
+| PL visible false `[NAME]` (470 texts) | 299 in 470 texts (63.6/100) | 28 (6.0/100) | 229 (48.7/100) |
+
+| Name traps: 50 texts without a person | Texts with a false `[NAME]` | False name spans |
+|---|---:|---:|
+| 1.7.5 | 33/50 | 54 |
+| 1.8.0 basic | 13/50 | 16 |
+| 1.8.0 deep | 25/50 | 35 |
+
+### All false masks over the whole holdout
+
+Each setting uses all 1,503 texts. Type columns count visible false spans, not affected texts.
+
+| Setting | All visible false spans | Per 100 texts | Name | E-mail | Secret | Address | Phone | Card |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1.7.5 | 636 | 42.3 | 564 | 36 | 7 | 11 | 8 | 8 |
+| 1.8.0 basic | 143 | 9.5 | 66 | 36 | 12 | 10 | 9 | 8 |
+| 1.8.0 deep | 405 | 26.9 | 328 | 36 | 12 | 10 | 9 | 8 |
+
+The two remaining 1.8.0 spans in each setting are one SSN span and one PIN span; the setup screen and `/scout details` count the PIN with password/PIN/key (13 false spans, 0.9 per 100 texts).
+
+### Other languages
+
+60 DE/FR/ES/IT texts; counts are fully masked values. The two 1.8.0 rows use basic names and addresses on.
+
+| Setting | Names | Addresses | E-mail | IBAN | Card | Phone | Visible false `[NAME]` spans |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1.7.5 | 39/108 | 0/28 | 24/24 | 20/20 | 16/16 | 14/20 | 36 |
+| 1.8.0 other_languages off (default) | 26/108 | 0/28 | 24/24 | 20/20 | 16/16 | 15/20 | 2 |
+| 1.8.0 other_languages on | 40/108 | 0/28 | 24/24 | 20/20 | 16/16 | 15/20 | 5 |
+
+### Seen and unseen names
+
+“Unseen” means the complete labelled name string did not occur in the checked earlier synthetic evaluation sets. It does not establish absence from all training data. The EN/PL unseen rows above are directly reported. The seen rows below are arithmetic complements of the all-name and unseen rows in the same results file; no additional detector run was made.
+
+| Earlier-set overlap | 1.7.5 fully masked | 1.8.0 basic fully masked | 1.8.0 deep fully masked |
+|---|---:|---:|---:|
+| EN seen | 81/118 | 26/118 | 73/118 |
+| EN unseen | 364/675 | 343/675 | 432/675 |
+| PL seen | 10/20 | 0/20 | 11/20 |
+| PL unseen | 109/390 | 176/390 | 236/390 |
+
+EN and PL text denominators are 973 and 470 respectively; the other-language set contains 60 texts. Structured-category EN/PL subtotals and a per-form partly-masked name table are not supplied in the results summary and are not inferred here. With `other_languages=off`, some foreign text remains uncertain and still reaches the fallback; the 26/108 name result is therefore not contradictory to the paragraph-level skip rule. Enabling the option did not recover any of the 28 international addresses.
+
+## How detection works and how we measure it
+
+### Detection mechanisms in 1.8.0
+
+The pipeline normalizes supported Unicode representations while retaining offsets to original text, detects spans locally, resolves overlaps and substitutes category placeholders. A detector can both miss real data and mask lookalikes. Sources below are paths relative to the plugin.
+
+| Category | Mechanism and limits |
+|---|---|
+| E-mail | Bounded local-part/domain regexes with an `@` precheck (`scout/privacy.py`). They recognize syntax, not whether a mailbox belongs to a person; this explains the technical-mail traps. Length bounds fix a backtracking problem also present in 1.7.5. |
+| PESEL | Eleven digits and weighted checksum; calendar/date validation, with explicit-label and legacy-fixture exceptions for damaged dates (`privacy.spans`). It is not an identity check. |
+| IBAN | Supported country-length table, alphanumeric syntax and mod-97 validation (`privacy._iban_valid`, `IBAN_LENGTHS`). Country coverage is finite. |
+| Card | Numeric candidates, Luhn and contextual scoring; explicit payment/card labels can admit a candidate without a valid Luhn (`scout/pii_model.py`, `eligible`, `accepted`). CVV uses a separate explicit-label rule in `privacy.py`. A valid checksum alone does not prove that digits are a card. |
+| SSN | Candidate format plus area/group/serial exclusions (000, 666, 9xx area; 00 group; 0000 serial), context model and explicit-label rules. The same category also includes NINO and another international identifier pattern (`pii_model.py`); the holdout row tests its annotated SSNs. |
+| Phone | Bounded numeric candidates, recognized international country codes, length/format and local context, plus EN/PL rules and extensions. Direct phone labels/prefixes take precedence over selected ID/amount exclusions; date/IP checks and context rules reduce lookalike matches (`pii_model.py`). |
+| Address | Bounded EN/PL street, postcode and locality patterns, explicit address labels, context scoring and PO Box patterns (`pii_model.py`). `privacy._extend_address` joins adjoining unit/postcode/city/state segments with a bounded extension loop and merges nearby address spans. This is incomplete international format support. |
+| Secret / password / code / PIN | Known-format and prefixed-key patterns, labels, bearer/private-key patterns and split-key handling in `privacy.py`/`pii_model.py`; password-like scoring uses length, character classes, entropy, interleaving and nearby cues, with code/ID/URL/template exclusions. Digit codes/PINs require access-related cues. Source-specific low/high thresholds and the optional loopback basal second opinion are described in the historical [password method](#passwords-and-pins); the holdout does not isolate these subtypes or measure the optional engine. |
+| Person name | The chain below combines token scores, span proposals, grammar features, document evidence and explicit filters. It runs only for user-role prompt text in request masking (`scout/prompt_guard.py`, `names=role == 'user'`); names intentionally stay readable in tool results. |
+
+**PII context model.** `scout/pii_model.py` generates candidates for phone/card/SSN/address and computes a logistic probability from hashed shape, cue, nearby-word and validator features in `scout/models/pii_context.json`. Hard eligibility gates and direct-format/context rules can decide before the learned threshold. It is neither a checksum-only detector nor an LLM. The other-language option gates names and addresses, while structured categories run regardless of paragraph language.
+
+**Name chain.** The previous detector (`scout/name_model.py`, `LegacyScore`) is a logistic token classifier using hashed character n-grams, casing, ordinary-word frequency and context. The EN route adds model C (`scout/name_model_c.py`): calibrated gradient-boosted trees proposing person spans and seeds. Its frozen trees read 62 of the original 584 features; runtime computes that projection, preserving float32 tree decisions. The G slot model (`scout/name_model_g.py`, shared `name_model_f.py`) scores a candidate's position and neighbouring words using shape, ordinary-word frequencies, punctuation and OEWN part-of-speech/semantic counts. The OEWN extract is ordinary grammar/animacy data, not a person-name gazetteer. C supplies multi-word additions; confirmed evidence can propagate repeats within the bounded text.
+
+Singletons on the confident EN route require evidence such as a greeting/contact cue, title, signature, speaker line, person-verb context or membership in a detected full name. Context filters reduce false names in field labels, organizations and works. `basic` retains full names, titles, isolated reversed pairs and detected repeats; `deep` also retains supported singleton evidence. Outside confident EN, deep retains the previous detector; basic still filters it to the same basic-level contract. These are detection rules, not complete person recognition or identity resolution.
+
+**Paragraph and document context.** `scout/paragraph_context.py` computes 32 shape/lexical features and returns language probabilities (EN/PL/mixed), document-style probabilities (email/chat, form/list, mixed, prose, technical) and normalized entropy. Today the name chain consumes its language probabilities; document-level name evidence also supports repeats. The type probabilities are available but do not enable a triage cascade, teacher loop or automatic training. They may support future triage work. `scout/language.py` combines lexical signals with this model to return `en`, `pl`, `other` or `uncertain`; “other” is conservative DE/FR/ES/IT function-word evidence, not a general multilingual classifier.
+
+Confident EN means the largest language probability is EN and P(EN) ≥ 0.8, with lexical/Polish vetoes. PL, mixed and uncertain paragraphs retain the previous route. Text over 8192 characters or over 64 capitalized tokens bypasses the new name path. New-path failures fall back to the previous detector; basic-level and other-language filtering still follows. Baseline scan failures reach the ordinary fail-closed policy, rather than silently returning raw text. These name-path limits do not establish a whole-mask runtime bound. `other_languages=off` skips names and addresses only in paragraphs classified as other; `on` permits addresses and basic-level names there. Structured detection remains active in every language.
+
+### Evaluation and change protocol
+
+1. Build a synthetic holdout independently, without detector code, following explicit span rules for all categories. Include lookalike traps, multiple mentions, languages, formats and previously unseen names. Freeze inputs, labels and a full SHA-256 manifest before evaluation; publish them in a separate repository with the scoring script (link in the release notes).
+2. Choose thresholds and rules using development/train/validation material only. Check complete name strings against earlier evaluation sets, retain an overlap manifest and report both all-name and unseen-name results. Earlier-set non-overlap is weaker than training-set non-overlap.
+3. Run the frozen candidate once for the blind report. Preserve the candidate ID, settings, interpreter, command, checksum manifest and raw aggregate output. If the holdout exposes a bug, disclose the fix and any rerun, as for the English titles above. Further tuning needs a fresh independent holdout.
+4. Report full and inclusive partial coverage with X/N denominators, trap texts with same-type false masks, and visible false spans per 100 texts separately. Do not compare the historical overlap-recall metric below directly with full value coverage. Check all categories, not just names, after each detector change; record intended differences and inspect losses and new false masks on development material.
+5. Preserve differential parity when optimizing representation. The supplied commander's first-release-candidate record reports 0 differences over 2,952 corpus texts plus 20,000 random/adversarial texts in all four name/other-language settings, with 874,262 C vectors and maximum probability delta 0.0. This concerns compaction, not quality on unseen data. These long checks were not rerun for this documentation change; the earlier slimming report describes an earlier, incomplete stage.
+6. Keep payload/integration checks separate: synthetic local spans do not prove Hermes hook coverage or injection blocking. Validate the final packaged tree with Hermes 0.23.0 and live synthetic requests, including user/system/tool/terminal/MCP/auxiliary paths, before updating the catalog pin. Injection timing/equivalence and long differential gates belong in the commander's separate validation mission.
+
+**Measurement stages.** (1) Blind run on the first release candidate. (2) Fix of English titled names (10/94 → 79/94), re-run. (3) Removal of a small curated list of Polish given names and vocative forms (project rule: no name lists), re-run on the release: PL full names 123/191 → 112/191, PL all mentions 187 → 176 (basic) and 261 → 247 (deep), EN full names 256 → 255; false masks and all other categories unchanged. PL names seen in earlier sets fell from 2/20 to 0/20 in basic, consistent with the list having favoured familiar names. The tables show stage 3; stages 2–3 are not blind.
+No new quality percentages are claimed for that change.
+
+### Reproduction
+
+The measurement helper is `holdout_pomiar.py`, supplied alongside the release evidence (not in the runtime package). Give it a parent containing `plugin/`, the frozen JSONL parts and the earlier-name manifest. It streams records and reports aggregates for basic/deep and both other-language settings; a 1.7.5 tree uses its original pipeline. It uses normalized local detector spans with names enabled and the candidate budget, without a registered basal engine. It does not run a Hermes provider request.
+
+```sh
+python -B holdout_pomiar.py /path/to/1.8-parent \
+  /path/to/published-holdout/part-a.jsonl /path/to/published-holdout/part-b.jsonl \
+  /path/to/published-holdout/part-c.jsonl \
+  --seen /path/to/published-holdout/imiona_widziane_wczesniej.json > holdout-1.8.json
+```
+
+The part filenames above are illustrative; use the published manifest, verify its full SHA-256 and retain its actual filenames. Run the same helper in a fresh process against the 1.7.5 parent for comparison. Do not use the report's checksum prefix as a full verification hash. Full runs are reproduction work for a separate mission; no new quality run was made for this documentation update.
+
+## Historical evidence (1.7.0–1.7.5)
+
+Everything below is retained from earlier releases and tested configurations. It is not a measurement of the 1.8.0 defaults. Rows with an explicit version retain that version; otherwise these are pre-1.8.0 observations inherited from the 1.7.5 documentation. Historical percentages without X/N remain archival and are not used as 1.8.0 quality claims. The current frozen holdout and its full-value metric are above.
+
 ## What Hermes already does, and what Local Scout adds
 
 The same synthetic content returned by `read_file`, `terminal` and a local MCP stdio tool in a real Hermes 0.23 process (no model call), recorded after Hermes' own redaction and the plugin hooks. One sample per cell, so this shows coverage, not detection rates. Hermes partly redacts phone numbers written as `+12125550147` without spaces; that form was not in the sample.
@@ -145,3 +292,4 @@ Measurements are from different test configurations and are not an end-to-end la
 ## Datasets and licenses
 
 The detector evaluations and training use Gretel synthetic PII, AdvPIIBench, deepset prompt-injections, Lakera Gandalf Ignore Instructions, CLINC150, BANKING77 and TechQA; the Hermes function-calling dataset only for a password false-positive count. See [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md) for attribution, licenses and distribution caveats. Local Scout is MIT licensed; see [LICENSE](../LICENSE).
+

@@ -4,8 +4,19 @@ from .schemas import SCHEMAS
 from .tools import handler_for
 
 
+MASKING_PROMPT = (
+    "Local Scout may replace values with intentional masks: "
+    "[NAME], [EMAIL], [PHONE], [ADDRESS], [CARD], [IBAN], [PESEL], [SSN], "
+    "[SECRET], [CODE], [PIN], [CVV]. They are not errors or injections. "
+    "You do not know the originals; never guess them. Preserve masks exactly. "
+    "If a task needs a real value, ask the user to fill it in locally, not in chat."
+)
+
+
 def register(ctx):
     scout = Scout(ctx)
+    from .scout.commands import register_commands
+    register_commands(ctx, scout)
     from .scout.prompt_guard import PromptGuard
     guard = PromptGuard(scout)
     ctx.register_hook('pre_auxiliary_call', guard.auxiliary)
@@ -27,6 +38,13 @@ def register(ctx):
     ctx.register_hook("transform_tool_result", scout.transform_tool_result)
     ctx.register_hook("transform_terminal_output", scout.transform_terminal_output)
     ctx.register_hook("transform_llm_output", scout.notify_output)
+    register_section = getattr(ctx, 'register_system_prompt_section', None)
+    if callable(register_section):
+        def masking_section(_session_info):
+            config = scout.profile()['config']
+            return (MASKING_PROMPT if config.get('mode', 'off') != 'off'
+                    and 'profile' in config.get('grants', {}).get('mask', []) else '')
+        register_section('local-scout.masking', masking_section, position='after_memory', max_chars=600)
     register_skill = getattr(ctx, 'register_skill', None)
     if callable(register_skill):
         from pathlib import Path
@@ -34,3 +52,7 @@ def register(ctx):
         register_skill('decide',path,
                        description='Choose a local method using train/validation facts and a premise audit.',
                        frontmatter={'name':'decide','description':'Facts, requirements and audit for choosing a local method.'})
+        path=Path(__file__).resolve().parent/'skills'/'masking'/'SKILL.md'
+        register_skill('masking',path,
+                       description='Work safely with Local Scout masks.',
+                       frontmatter={'name':'masking','description':'Use Local Scout masks without reconstructing values.'})
