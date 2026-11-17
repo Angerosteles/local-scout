@@ -34,7 +34,7 @@ class Menu(unittest.TestCase):
 
     def configured(self):
         self.scout.configure_local('report', grants={scope: ['profile'] for scope in menu.SCOPES},
-                                   name_masking='basic', address_masking='on', other_languages='off')
+                                   name_masking='basic', address_masking='on', other_languages='off', pseudonyms='off')
 
     def test_enter_space_and_arrows_change_without_saving(self):
         # Names default to off: forward goes to basic, backward wraps to deep.
@@ -60,7 +60,7 @@ class Menu(unittest.TestCase):
         self.assertEqual(state['names'], 'basic')
 
     def test_save_defaults(self):
-        screens, messages = self.drive(['down'] * 7 + ['\n'])
+        screens, messages = self.drive(['down'] * menu.ROWS.index('save') + ['\n'])
         config = self.scout.profile()['config']
         self.assertEqual((config['mode'], config['name_masking'], config['address_masking'],
                           config['other_languages']), ('report', 'off', 'on', 'off'))
@@ -130,7 +130,7 @@ class Menu(unittest.TestCase):
 
     def test_no_changes_does_not_write(self):
         self.configured()
-        for keys in (['s'], ['q'], ['\x1b'], ['up', '\n'], ['down'] * 7 + ['\n'], ['down'] * 6 + ['\n', 'q', 'q']):
+        for keys in (['s'], ['q'], ['\x1b'], ['up', '\n'], ['down'] * menu.ROWS.index('save') + ['\n'], ['down'] * menu.ROWS.index('details') + ['\n', 'q', 'q']):
             with self.subTest(keys=keys), patch.object(self.scout, 'configure_local') as save:
                 self.assertEqual(self.drive(keys)[1], ['No changes.'])
                 save.assert_not_called()
@@ -184,55 +184,75 @@ class Menu(unittest.TestCase):
                     self.assertTrue(all(len(line) <= min(80, width) for line in details.splitlines()))
                     if width >= 68:
                         self.assertIn(f'(•) {names}', screen)
-                        self.assertIn('57–100% detected · 0–2.4 false masks per 100 texts', screen)
+                        self.assertIn('Our test: 87–100% masked · 0–1.3 false masks per 100 texts', screen)
         state['names'] = 'off'
         screen = menu.render(state, 5)
         self.assertIn('Reply note       (•) on  ( ) off', screen)
         self.assertIn('Names: off (optional; only in your prompts)', screen)
         self.assertIn(menu.HELP, screen)
-        self.assertIn('full names 59–80% detected · 3.7–6.0 false masks', menu.render(dict(state, names='basic')))
-        self.assertIn('all names 60–64% detected · 8.4–48.7 false masks', menu.render(dict(state, names='deep')))
+        self.assertIn('full names 68–86% detected · 15.9–23.5 false masks', menu.render(dict(state, names='basic')))
+        self.assertIn('all names 52–70% detected · 19.6–104.9 false masks', menu.render(dict(state, names='deep')))
         without = menu.render(dict(state, addresses=False))
         self.assertNotIn('address', without.split('\n\n')[0])
-        self.assertIn('68–100% detected', without)
+        self.assertIn('Our test: 87–100% masked', without)
         self.assertIn('Masking off: nothing is masked', menu.render(dict(state, masking=False)))
         table = menu.render_details()
-        for row in ('e-mail            200/200  100%   2.4', 'address           114/200   57%   0.7',
-                    'password/PIN/key  136/200   68%   0.9', 'basic PL          112/191   59%  176/410   43%  6.0',
-                    'deep PL           112/191   59%  247/410   60%  48.7'):
+        for row in ('e-mail            200/200  100%   32/2400 · 1.3', 'address           199/230   87%   6/2400 · 0.2',
+                    'password/PIN/key  199/230   87%   19/2400 · 0.8', 'basic PL          90/132    68%  162/412   39%  178/758 · 23.5',
+                    'deep PL           90/132    68%  216/412   52%  795/758 · 104.9',
+                    'phone             230/230  100%   1/2400 · 0.04'):
             self.assertIn(row, table)
-        self.assertLessEqual(len(table.splitlines()), 23)
+        self.assertLessEqual(len(table.splitlines()), 24)
 
     def test_measurements_match_evidence(self):
-        evidence = (PLUGIN / 'docs' / 'EVIDENCE.md').read_text()
-        rows = {line.split('|')[1].strip(): [c.strip() for c in line.split('|')[2:-1]]
-                for line in evidence.splitlines() if line.startswith('| ') and line.count('|') > 4}
+        evidence = (PLUGIN / 'docs' / 'EVIDENCE.md').read_text().split('## Development sets')[0]
+        def rows(section, next_section):
+            text = evidence.split(section)[1].split(next_section)[0]
+            return {line.split('|')[1].strip(): [c.strip() for c in line.split('|')[2:-1]]
+                    for line in text.splitlines() if line.startswith('| ') and line.count('|') > 4}
+        targets = rows('### Target categories', '### Visible false masks')
+        false_rows = rows('### Visible false masks', '### Person names')
+        names = rows('### Person names', '### Other languages')
         key = {'e-mail': 'email', 'card number': 'card', 'password/PIN/key': 'secret'}
-        false = dict(zip(('Name', 'E-mail', 'Secret', 'Address', 'Phone', 'Card'), rows['1.8.0 basic'][2:]))
-        for name, masked, false_masks in menu.STRUCTURED:
+        false = dict(zip(('email', 'pesel', 'card', 'ssn', 'iban', 'phone', 'secret', 'address', 'name'),
+                         false_rows['1.9.0 default'][2:]))
+        self.assertIn(f'Blind synthetic test, {menu.HOLDOUT_TEXTS:,} texts', evidence)
+        for name, masked, total, false_masks in menu.STRUCTURED:
             with self.subTest(name=name):
-                self.assertTrue(rows[key.get(name, name.lower())][1].startswith(f'{masked}/200 '))
-                column = {'e-mail': 'E-mail', 'password/PIN/key': 'Secret', 'card number': 'Card'}.get(name, name.title())
-                expected = int(false.get(column, 0)) + (1 if name in ('SSN', 'password/PIN/key') else 0)
-                self.assertEqual(false_masks, expected)
-        self.assertIn('one SSN span and one PIN span', evidence)
-        for mode, column in (('basic', 1), ('deep', 2)):
+                category = key.get(name, name.lower())
+                self.assertEqual(targets[category][1], f'{masked}/{total}')
+                self.assertEqual(false[category], f'{false_masks}/{menu.HOLDOUT_TEXTS}')
+        for mode, column in (('basic', 1), ('deep', 3)):
             for lang, (full, every, false_names) in menu.NAMES[mode].items():
                 total_full, total_all, texts = menu.NAME_TOTALS[lang]
-                self.assertEqual(rows[f'{lang} full'][column], f'{full}/{total_full}')
-                self.assertEqual(rows[f'{lang} all names'][column], f'{every}/{total_all}')
-                self.assertTrue(rows[f'{lang} visible false `[NAME]` ({texts} texts)'][column].startswith(f'{false_names} '))
+                self.assertEqual(names[f'{lang} full'][column], f'{full}/{total_full}')
+                self.assertEqual(names[f'{lang} all names'][column], f'{every}/{total_all}')
+                self.assertEqual(names[f'{lang} false names / texts'][column], f'{false_names}/{texts}')
+
+    def test_numbered_help_at_80_and_40_columns(self):
+        state = menu.state_for(self.scout)
+        for numbered in (False, True):
+            state['numbered'] = numbered
+            for width in (80, 40):
+                with self.subTest(numbered=numbered, width=width):
+                    screen = menu.render(state, menu.ROWS.index('numbered'), width)
+                    help_text = screen.split('\n\n')[-1].split('↑↓')[0].strip()
+                    self.assertEqual(' '.join(help_text.split()), menu.DESCRIPTIONS['numbered'][numbered])
+                    self.assertTrue(all(len(line) <= width for line in screen.splitlines()))
+                    self.assertNotIn('\n   restoration.', help_text)
+                    if width == 80:
+                        self.assertEqual(help_text, menu.DESCRIPTIONS['numbered'][numbered])
 
     def test_details_view_opens_and_returns(self):
         self.configured()
         for back in ('\x1b', 'q', '\n', ' '):
             with self.subTest(back=back):
-                screens, messages = self.drive(['down'] * 6 + ['\n', back, 's'])
+                screens, messages = self.drive(['down'] * menu.ROWS.index('details') + ['\n', back, 's'])
                 self.assertIn('Local Scout · measurements', screens[-2])
                 self.assertIn(menu.DETAILS_HELP, screens[-2])
                 self.assertIn('Local Scout setup', screens[-1])
                 self.assertEqual(messages, ['No changes.'])
-        with patch.dict('sys.modules', {'curses': None}), patch('builtins.input', side_effect=['7', '', 'q']), \
+        with patch.dict('sys.modules', {'curses': None}), patch('builtins.input', side_effect=[str(menu.ROWS.index('details') + 1), '', 'q']), \
              contextlib.redirect_stdout(io.StringIO()) as out:
             menu.run(self.scout, self.home)
         self.assertIn('\n  e-mail            200/200', out.getvalue())
@@ -284,7 +304,7 @@ class Menu(unittest.TestCase):
                     self.assertTrue(all('q quit' in ' '.join(' '.join(f).split()) for f in frames))
 
     def test_fallback_numbers_and_confirmation(self):
-        for inputs, saved in ((['2', '3', '8'], True), (['2', '9', 'y'], True),
+        for inputs, saved in ((['2', '3', '9'], True), (['2', '10', 'y'], True),
                               (['2', 'q', 'n'], False), (['2', 'esc', 'y'], True)):
             with self.subTest(inputs=inputs):
                 self.configured()
@@ -292,8 +312,8 @@ class Menu(unittest.TestCase):
                      contextlib.redirect_stdout(io.StringIO()) as out:
                     menu.run(self.scout, self.home)
                 self.assertIn(' 2. Names', out.getvalue())
-                self.assertIn(' 8. Save', out.getvalue())
-                self.assertIn(' 9. Cancel', out.getvalue())
+                self.assertIn(' 9. Save', out.getvalue())
+                self.assertIn('10. Cancel', out.getvalue())
                 self.assertEqual(self.scout.profile()['config']['name_masking'], 'deep' if saved else 'basic')
 
     def test_fallback_enter_changes_and_eof_discards(self):

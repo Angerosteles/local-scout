@@ -1,6 +1,7 @@
 """Offline paragraph context probabilities; no runtime dependencies beyond Python."""
 import json, math, re
 from functools import lru_cache
+from operator import mul
 from pathlib import Path
 
 _WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
@@ -60,7 +61,7 @@ def classify(paragraph, *, weights=None):
     for task in ("type", "lang"):
         model = source[task]
         standardized = [(x - m) / s for x, m, s in zip(values, model["mean"], model["scale"])]
-        logits = [b + sum(w * x for w, x in zip(row, standardized)) for row, b in zip(model["coef"], model["intercept"])]
+        logits = [b + sum(map(mul, row, standardized)) for row, b in zip(model["coef"], model["intercept"])]
         peak = max(logits)
         exps = [math.exp(x - peak) for x in logits]
         total = sum(exps)

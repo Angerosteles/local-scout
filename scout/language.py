@@ -44,28 +44,59 @@ _OTHER = (
 )
 _EN_PL = frozenset('the and to of is are for with this that you i w na się sie jest oraz proszę prosze nie'.split())
 
+_EN_GREET = frozenset(('hi', 'hello', 'please', 'thanks'))
+
 def paragraph_language(text, *, lexical_only=False, probabilities=None):
     """Require strong evidence of one foreign language; uncertain text retains coverage."""
-    words = re.findall(r'[^\W\d_]+', text.lower())
-    foreign = max((sum(w in vocabulary for w in words) for vocabulary in _OTHER), default=0)
-    familiar = sum(w in _EN_PL for w in words)
-    if len(words) >= 8 and foreign >= 3 and familiar <= 1 and foreign >= 3 * max(familiar, 1):
-        return 'other'
-    if words and words[0] in ('cześć', 'czesc', 'witaj', 'witam', 'hej'):
-        return 'pl'
-    hint = detect(text)
-    if hint == 'pl' and any(w in {'hi', 'hello', 'please', 'thanks'} for w in words):
-        return 'uncertain'
-    if hint in ('pl', 'en'):
-        return hint
-    if len(words) < 8 or lexical_only:
+    cache = CACHE.get()
+    lkey = ('plang_lex', text, id(detect))
+    if cache is not None and lkey in cache:
+        lex = cache[lkey]
+    else:
+        words = _WORD.findall(text.lower())
+        if len(words) >= 8:
+            familiar = sum(w in _EN_PL for w in words)
+            if familiar <= 1:
+                foreign = max((sum(w in vocabulary for w in words) for vocabulary in _OTHER), default=0)
+                if foreign >= 3 and foreign >= 3 * max(familiar, 1):
+                    lex = 'other'
+                else:
+                    lex = None
+            else:
+                lex = None
+        else:
+            lex = None
+        if lex is None:
+            if words and words[0] in ('cześć', 'czesc', 'witaj', 'witam', 'hej'):
+                lex = 'pl'
+            else:
+                hint = detect(text)
+                if hint == 'pl' and any(w in _EN_GREET for w in words):
+                    lex = 'uncertain'
+                elif hint in ('pl', 'en'):
+                    lex = hint
+                elif len(words) < 8:
+                    lex = 'uncertain'
+                else:
+                    lex = 'need_pc'
+        if cache is not None:
+            cache[lkey] = lex
+    if lex != 'need_pc':
+        return lex
+    if lexical_only:
         return 'uncertain'
     from . import paragraph_context
     try:
         if probabilities is None:
-            probabilities = paragraph_context.classify(text)['lang']
+            pc_key = ('pc_lang', text, id(paragraph_context.classify))
+            if cache is not None and pc_key in cache:
+                probabilities = cache[pc_key]
+            else:
+                probabilities = paragraph_context.classify(text)['lang']
+                if cache is not None:
+                    cache[pc_key] = probabilities
     except Exception:
         return 'uncertain'
-    if len(words) >= 8 and probabilities.get('PL', 0) >= .85:
+    if probabilities.get('PL', 0) >= .85:
         return 'pl'
     return 'uncertain'

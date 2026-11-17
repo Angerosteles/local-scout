@@ -11,6 +11,10 @@ MASKING_PROMPT = (
     "You do not know the originals; never guess them. Preserve masks exactly. "
     "If a task needs a real value, ask the user to fill it in locally, not in chat."
 )
+NUMBERED_PROMPT = (
+    " Numbered masks such as [EMAIL_1] identify the same exact value within a category, profile and process. "
+    "Copy tokens exactly; never guess hidden values. Nothing is restored in replies or tool arguments."
+)
 
 
 def register(ctx):
@@ -42,9 +46,9 @@ def register(ctx):
     if callable(register_section):
         def masking_section(_session_info):
             config = scout.profile()['config']
-            return (MASKING_PROMPT if config.get('mode', 'off') != 'off'
+            return (MASKING_PROMPT + (NUMBERED_PROMPT if config.get('pseudonyms', 'off') == 'on' else '') if config.get('mode', 'off') != 'off'
                     and 'profile' in config.get('grants', {}).get('mask', []) else '')
-        register_section('local-scout.masking', masking_section, position='after_memory', max_chars=600)
+        register_section('local-scout.masking', masking_section, position='after_memory', max_chars=900)
     register_skill = getattr(ctx, 'register_skill', None)
     if callable(register_skill):
         from pathlib import Path

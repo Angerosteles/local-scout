@@ -47,7 +47,7 @@ class MaskingGuidanceTests(unittest.TestCase):
             self.assertTrue(ctx.skills['masking']['path'].is_file())
             self.assertIn('decide', ctx.skills)
             render, options = sections['local-scout.masking']
-            self.assertEqual(options, {'position': 'after_memory', 'max_chars': 600})
+            self.assertEqual(options, {'position': 'after_memory', 'max_chars': 900})
             self.assertLessEqual(len(MASKING_PROMPT), options['max_chars'])
             self.assertEqual(render({}), MASKING_PROMPT)
             self.assertFalse((Path(tmp) / 'plugin-data').exists())

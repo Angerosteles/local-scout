@@ -2,7 +2,156 @@
 
 Part of the [Local Scout README](../README.md).
 
+## Blind holdout v2 (1.9.0)
+
+**Blind synthetic test, 2,400 texts.** Gemini 4 Hydrogen built A+B+C without access to detector code or earlier sets; frozen 15 November 2026 at 19:45. Both frozen trees were measured once on 17 November: 1.8.0 (`5f95fb9`) and 1.9.0 (`e83ffd0`). No detector was tuned after this measurement. These are results on our own synthetic set, not protection guarantees: expect lower detection on real data, and 100% means every value in this test, not every possible value.
+
+Method: the scoring helper `holdout_pomiar.py` (published with the [1.8 holdout](https://github.com/Angerosteles/local-scout-holdout), commit `d89b475`) ran once per tree; holdout v2 gold dictionaries were first converted to the same span format. Part D is grouped by evasion technique. **The full holdout v2 is being prepared for publication and will be released with Local Scout 2.0**; until then these numbers cannot be reproduced independently.
+
+`default` in the aggregate files means **names basic**, addresses on, other languages off. Product defaults keep names **off**; these measurements do not imply names are on by default. `deep`, `other_on` and `deep_other_on` select deep names and/or other languages. Numbered masks are off.
+
+### Definitions
+
+- **Masked:** every letter/digit in a labelled span is covered by the union of detected masks. Punctuation and whitespace do not count. This measures full value coverage, not same-type precision: another category's mask may contribute.
+- **Partly:** at least one letter/digit is covered, including fully masked values. It is an inclusive count, not an additional disjoint group. A long address with only its street covered can be partly masked while still leaking information.
+- **Traps:** labelled lookalikes that should remain visible under the holdout's annotation policy. A trap-text false alarm means at least one mask of that target type overlaps no labelled value. Other genuine labelled values can occur in the text.
+- **Visible false masks:** detected spans overlapping no labelled value of any category. Rates are counts of these spans per 100 texts, not the percentage of texts affected and not the complement of precision. Several false masks can occur in one text. Counts use detector spans before rendering; overlapping or adjacent spans may be merged in the displayed mask.
+- **Names:** each person mention is scored separately: full name, titled surname (title excluded from gold), reversed “Surname, Name”, or single given name/surname in person context. Company names, places, works and street patrons are not person-name gold. Addresses are full deliverable blocks under the labelling rules, not just street names.
+- The `secret` evaluation groups secret values; it does not provide separate quality estimates for passwords, API keys, codes and PINs. CVV is not separately reported. The results measure local masking with names enabled, not Hermes hooks, injection resistance, optional basal confirmation or end-to-end provider payloads.
+
+### Target categories
+
+Basic names, addresses on, other languages off. Denominators are labelled target values, not texts: 200 or 230 structured values, 300 name mentions, and 50 trap texts per target category. Side mentions appear in the language tables below.
+
+| Category | 1.8.0 fully masked | 1.9.0 fully masked | 1.9.0 partly (inclusive) | Trap texts with this false mask, 1.8.0 → 1.9.0 |
+| --- | --- | --- | --- | --- |
+| email | 200/200 | 200/200 | 200/200 | 14/50 → 14/50 |
+| pesel | 200/230 | 212/230 | 212/230 | 0/50 → 0/50 |
+| card | 199/200 | 200/200 | 200/200 | 0/50 → 0/50 |
+| ssn | 199/230 | 209/230 | 209/230 | 0/50 → 0/50 |
+| iban | 200/200 | 200/200 | 200/200 | 0/50 → 0/50 |
+| phone | 230/230 | 230/230 | 230/230 | 0/50 → 0/50 |
+| secret | 175/230 | 199/230 | 204/230 | 0/50 → 1/50 |
+| address | 158/230 | 199/230 | 228/230 | 1/50 → 1/50 |
+| name | 166/300 | 166/300 | 168/300 | 8/50 → 8/50 |
+
+### Visible false masks by category
+
+Every category cell is **false spans / 2,400 texts**, not a precision estimate. Several spans can occur in one text. The two language switches have identical false-span totals on this sample. The password/PIN/key menu row groups secret/code/PIN spans; here only secret contributes.
+
+| Setting | All spans / texts | Per 100 texts | email | pesel | card | ssn | iban | phone | secret | address | name |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1.8.0 default | 499/2400 | 20.8 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 4/2400 | 18/2400 | 12/2400 | 431/2400 |
+| 1.8.0 deep | 1202/2400 | 50.1 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 4/2400 | 18/2400 | 12/2400 | 1134/2400 |
+| 1.8.0 other_on | 499/2400 | 20.8 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 4/2400 | 18/2400 | 12/2400 | 431/2400 |
+| 1.8.0 deep_other_on | 1202/2400 | 50.1 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 4/2400 | 18/2400 | 12/2400 | 1134/2400 |
+| 1.9.0 default | 491/2400 | 20.5 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 1/2400 | 19/2400 | 6/2400 | 431/2400 |
+| 1.9.0 deep | 1194/2400 | 49.8 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 1/2400 | 19/2400 | 6/2400 | 1134/2400 |
+| 1.9.0 other_on | 491/2400 | 20.5 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 1/2400 | 19/2400 | 6/2400 | 431/2400 |
+| 1.9.0 deep_other_on | 1194/2400 | 49.8 | 32/2400 | 0/2400 | 2/2400 | 0/2400 | 0/2400 | 1/2400 | 19/2400 | 6/2400 | 1134/2400 |
+
+One new false secret mask occurs in an **EN trap** (0/50 → 1/50 secret traps overall; 0/35 → 1/35 EN secret traps). False address spans fall 12/2,400 → 6/2,400 and false phone spans 4/2,400 → 1/2,400. Overall with basic names: 499/2,400 → 491/2,400; names contribute 431/2,400 in both releases. This is not a claim that every false-mask category improves.
+
+### Person names
+
+Names are unchanged on A+B+C. Each occurrence is scored; all-name totals include side mentions across EN/PL texts. False-name rates in the menu are basic EN 252/1,582 texts (15.9/100), basic PL 178/758 (23.5/100), deep EN 310/1,582 (19.6/100), deep PL 795/758 (104.9/100). A rate above 100 is possible because it counts spans.
+
+| Names in all EN/PL texts | 1.8.0 basic | 1.9.0 basic | 1.8.0 deep | 1.9.0 deep |
+| --- | --- | --- | --- | --- |
+| EN all names | 462/827 | 462/827 | 579/827 | 579/827 |
+| EN full | 233/272 | 233/272 | 233/272 | 233/272 |
+| EN single | 1/219 | 1/219 | 101/219 | 101/219 |
+| EN titled | 171/189 | 171/189 | 171/189 | 171/189 |
+| EN reversed | 57/147 | 57/147 | 74/147 | 74/147 |
+| EN false names / texts | 252/1582 | 252/1582 | 310/1582 | 310/1582 |
+| PL all names | 162/412 | 162/412 | 216/412 | 216/412 |
+| PL full | 90/132 | 90/132 | 90/132 | 90/132 |
+| PL single | 0/116 | 0/116 | 49/116 | 49/116 |
+| PL titled | 45/92 | 45/92 | 46/92 | 46/92 |
+| PL reversed | 27/72 | 27/72 | 31/72 | 31/72 |
+| PL false names / texts | 178/758 | 178/758 | 795/758 | 795/758 |
+
+### Other languages
+
+Fully masked side values across 60 texts. Names are unchanged; international addresses improve but remain incomplete. `default` means other languages off, `other_on` means on. A conservative language classifier may route some foreign paragraphs through the fallback even when the option is off.
+
+| Basic names; 60 DE/FR/ES/IT texts | name | address | email | phone | iban | card | secret |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1.8.0 default | 29/60 | 0/12 | 24/24 | 24/24 | 24/24 | 11/12 | 15/24 |
+| 1.8.0 other_on | 31/60 | 0/12 | 24/24 | 24/24 | 24/24 | 11/12 | 15/24 |
+| 1.9.0 default | 29/60 | 10/12 | 24/24 | 24/24 | 24/24 | 12/12 | 17/24 |
+| 1.9.0 other_on | 31/60 | 10/12 | 24/24 | 24/24 | 24/24 | 12/12 | 17/24 |
+
+### Part D: obfuscation attempts (210 texts)
+
+Separate from the 2,400-text main table: 30 texts for each of seven structured categories, grouped by eight techniques. The 280 target values across D outnumber texts; name side mentions are excluded from this table. Fully means full coverage of the original labelled value, even if its spelling is encoded. This test does not imply general decoding support.
+
+| Technique | Texts | 1.8.0 basic fully | 1.9.0 basic fully | 1.9.0 basic partly | 1.9.0 deep fully | Limit |
+| --- | --- | --- | --- | --- | --- | --- |
+| alt_separators | 26 | 4/31 | 5/31 | 5/31 | 5/31 | partial coverage |
+| base64 | 27 | 0/34 | 0/34 | 0/34 | 0/34 | not handled in 1.9 |
+| homoglyphs | 26 | 1/35 | 9/35 | 9/35 | 9/35 | partial coverage |
+| html_entities | 26 | 0/37 | 34/37 | 34/37 | 34/37 | partial coverage |
+| line_break | 26 | 0/36 | 17/36 | 18/36 | 17/36 | partial coverage |
+| spaced_chars | 26 | 5/36 | 5/36 | 5/36 | 5/36 | not handled in 1.9 |
+| url_encoding | 26 | 0/35 | 33/35 | 33/35 | 33/35 | partial coverage |
+| words_digits | 27 | 6/36 | 6/36 | 6/36 | 7/36 | not handled in 1.9 |
+
+**Base64, digits written as words (`words_digits`), and spaced letters (`spaced_chars`) are not handled in 1.9.** Incidental masks explain their nonzero scores; those techniques have no dedicated support. HTML entities, URL escapes, homoglyphs, line breaks and alternate separators have incomplete coverage too. In deep mode, the HTML-entity group loses one single-name side mention: 3/3 → 2/3 fully masked (all side names 12/13 → 11/13). Basic side names there stay 9/13; the main A+B+C name results are unchanged. The D deep result for words_digits is 7/36 in both releases; all other D target full-coverage counts match basic.
+
+## Development sets (not blind)
+
+### Holdout 1.8: 1,503 texts
+
+This exposed synthetic set was repeatedly used to tune 1.9; it is now a **development set, not a blind holdout**. The tables compare (raw results: `results-1.8.0.json` and `results-1.9.0.json` in the holdout repository) frozen 1.8.0 and 1.9.0 with basic names. Rows count target values, excluding side mentions; for example the address row is 185/200, while including the 13/28 foreign side addresses gives 198/228.
+
+| Category (target values) | 1.8.0 fully | 1.9.0 fully |
+| --- | --- | --- |
+| email | 200/200 | 200/200 |
+| pesel | 200/200 | 200/200 |
+| card | 195/200 | 200/200 |
+| ssn | 197/200 | 200/200 |
+| iban | 187/200 | 200/200 |
+| phone | 165/200 | 196/200 |
+| secret | 136/200 | 193/200 |
+| address | 114/200 | 185/200 |
+| name | 105/200 | 105/200 |
+
+| Setting | 1.8.0 false spans / texts | 1.9.0 false spans / texts |
+| --- | --- | --- |
+| default | 143/1503 | 110/1503 |
+| deep | 405/1503 | 372/1503 |
+| other_on | 146/1503 | 113/1503 |
+| deep_other_on | 408/1503 | 375/1503 |
+
+### Gretel (development)
+
+Gretel (5,000 texts, external) was also used during 1.9 tuning, so it is a development set too. Fully masked with basic names: phone 861/904, secret 107/121, SSN 1,582/1,661, address 1,255/1,432; 250 false spans per 5,000 texts (69/5,000 with names off). Earlier Gretel figures below use a different metric and must not be merged with these.
+
+## Comparison with Microsoft Presidio
+
+Same texts, same scoring, same machine (17 November 2026). Presidio: presidio-analyzer 2.2.366, spaCy 3.8.18, `en_core_web_lg` 3.8.0, default `AnalyzerEngine` (English NER and built-in recognizers, its default score threshold 0, context enhancement on) plus its predefined PL PESEL recognizer; threshold 0.5 shown in brackets where it differs. Local Scout 1.9.0: basic names, addresses on, other languages off. Mapping: PERSON → name, LOCATION → address, PHONE_NUMBER, EMAIL_ADDRESS, CREDIT_CARD, IBAN_CODE, US_SSN, PL_PESEL. Presidio has **no secret recognizer** and no postal-address type, so those rows show scope, not quality. Types outside the mapping (dates, URLs, IP addresses…) are not counted as false masks. Presidio's default English model is not meant for Polish, so the fair comparison is the **English** part of the blind holdout v2 (1,582 texts):
+
+| Category (EN, fully masked) | Local Scout 1.9.0 | Presidio |
+| --- | --- | --- |
+| email | 140/140 | 140/140 |
+| phone | 161/161 | 158/161 (66/161) |
+| card | 140/140 | 120/140 |
+| IBAN | 140/140 | 137/140 |
+| SSN | 189/207 | 181/207 (143/207) |
+| address | 159/161 | 1/161 (LOCATION is not a postal address) |
+| secret | 148/161 | not supported |
+| **name** (opt-in in Scout) | 126/210 | **196/210** |
+| false masks, names excluded / 1,582 texts | **45** | 174 (120) |
+| false name masks / 1,582 texts | 252 | **48** |
+
+On the Polish part (758 texts) Presidio's English model misses most Polish phones (31/69) and adds 1,477 false name masks, which is a configuration mismatch rather than a fair result. Evasion texts (210, 280 values): Local Scout 109/280, Presidio 24/280. Mean time per text on the same samples: Local Scout 0.2–3.9 ms, Presidio 4.4–56 ms (7–21× slower).
+
+**Reading:** for structured data and addresses, the part Local Scout masks by default, it detects more with fewer false masks and is much faster. **For English person names Presidio's NER is clearly better** (more names found, five times fewer false name masks); this is the main target for names in 2.0. This is one configuration of each tool on our own synthetic set, not a general ranking.
+
 ## 1.8.0 frozen holdout
+
+**Historical 1.8.0 release evaluation; this set later became the 1.9 development set above.** These tables describe the old release stages, not the current menu.
 
 Measurement stages: blind run on the first release candidate → fix of English titled names → re-run on the release candidate; comparison: 1.7.5. All quality counts in this section come from the supplied `HOLDOUT_WYNIKI_18.md`, not the development sets or the historical results below.
 
@@ -67,7 +216,7 @@ Each setting uses all 1,503 texts. Type columns count visible false spans, not a
 | 1.8.0 basic | 143 | 9.5 | 66 | 36 | 12 | 10 | 9 | 8 |
 | 1.8.0 deep | 405 | 26.9 | 328 | 36 | 12 | 10 | 9 | 8 |
 
-The two remaining 1.8.0 spans in each setting are one SSN span and one PIN span; the setup screen and `/scout details` count the PIN with password/PIN/key (13 false spans, 0.9 per 100 texts).
+The two remaining 1.8.0 spans in each setting are one SSN span and one PIN span; the 1.8.0 setup screen and `/scout details` counted the PIN with password/PIN/key (13 false spans, 0.9 per 100 texts).
 
 ### Other languages
 
@@ -126,8 +275,8 @@ Confident EN means the largest language probability is EN and P(EN) ≥ 0.8, wit
 2. Choose thresholds and rules using development/train/validation material only. Check complete name strings against earlier evaluation sets, retain an overlap manifest and report both all-name and unseen-name results. Earlier-set non-overlap is weaker than training-set non-overlap.
 3. Run the frozen candidate once for the blind report. Preserve the candidate ID, settings, interpreter, command, checksum manifest and raw aggregate output. If the holdout exposes a bug, disclose the fix and any rerun, as for the English titles above. Further tuning needs a fresh independent holdout.
 4. Report full and inclusive partial coverage with X/N denominators, trap texts with same-type false masks, and visible false spans per 100 texts separately. Do not compare the historical overlap-recall metric below directly with full value coverage. Check all categories, not just names, after each detector change; record intended differences and inspect losses and new false masks on development material.
-5. Preserve differential parity when optimizing representation. The supplied commander's first-release-candidate record reports 0 differences over 2,952 corpus texts plus 20,000 random/adversarial texts in all four name/other-language settings, with 874,262 C vectors and maximum probability delta 0.0. This concerns compaction, not quality on unseen data. These long checks were not rerun for this documentation change; the earlier slimming report describes an earlier, incomplete stage.
-6. Keep payload/integration checks separate: synthetic local spans do not prove Hermes hook coverage or injection blocking. Validate the final packaged tree with Hermes 0.23.0 and live synthetic requests, including user/system/tool/terminal/MCP/auxiliary paths, before updating the catalog pin. Injection timing/equivalence and long differential gates belong in the commander's separate validation mission.
+5. Preserve differential parity when optimizing representation. The first-release-candidate record reports 0 differences over 2,952 corpus texts plus 20,000 random/adversarial texts in all four name/other-language settings, with 874,262 C vectors and maximum probability delta 0.0. This concerns compaction, not quality on unseen data. These long checks were not rerun for this documentation change; the earlier slimming report describes an earlier, incomplete stage.
+6. Keep payload/integration checks separate: synthetic local spans do not prove Hermes hook coverage or injection blocking. Validate the final packaged tree with Hermes 0.23.0 and live synthetic requests, including user/system/tool/terminal/MCP/auxiliary paths, before updating the catalog pin. Injection timing/equivalence and long differential gates belong in the maintainer's separate validation mission.
 
 **Measurement stages.** (1) Blind run on the first release candidate. (2) Fix of English titled names (10/94 → 79/94), re-run. (3) Removal of a small curated list of Polish given names and vocative forms (project rule: no name lists), re-run on the release: PL full names 123/191 → 112/191, PL all mentions 187 → 176 (basic) and 261 → 247 (deep), EN full names 256 → 255; false masks and all other categories unchanged. PL names seen in earlier sets fell from 2/20 to 0/20 in basic, consistent with the list having favoured familiar names. The tables show stage 3; stages 2–3 are not blind.
 No new quality percentages are claimed for that change.

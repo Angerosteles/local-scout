@@ -51,11 +51,12 @@ class Commands(unittest.TestCase):
     def test_fresh_status_is_actual_state_without_creating_files(self):
         text = self.handle('', **self.local)
         self.assertTrue(text.startswith('Local Scout: masking on\nMasks: e-mail, PESEL'))
-        self.assertIn('57–100% detected · 0–2.4 false masks per 100 texts', text)
+        self.assertIn('Our test: 87–100% masked · 0–1.3 false masks per 100 texts', text)
+        self.assertIn('Own synthetic test, 2,400 texts; not a guarantee', text)
         self.assertIn('Names: off (optional; only in your prompts)', text)
         self.assertIn('insights off · reply note on', text)
         self.assertIn('/scout details', text)
-        self.assertEqual(len(text.splitlines()), 6)
+        self.assertIn('numbered masks off (no restoration)', ' '.join(text.split()))
         self.assertTrue(all(len(line) <= 80 for line in text.splitlines()))
         self.assertEqual(self.handle('status', **self.local), text)
         self.assertFalse(self.home.exists())
@@ -68,7 +69,7 @@ class Commands(unittest.TestCase):
         for context in (self.local, dict(platform='discord'), {}):
             text = self.handle('details', **context)
             self.assertIn('Local Scout · measurements', text)
-            self.assertIn('deep PL           112/191   59%  247/410   60%  48.7', text)
+            self.assertIn('deep PL           90/132    68%  216/412   52%  795/758 · 104.9', text)
             self.assertNotIn(LOCAL_ONLY, text)
         self.assertFalse(self.home.exists())
 
@@ -80,7 +81,7 @@ class Commands(unittest.TestCase):
                     text = self.handle(name + ' ' + value, **self.local)
                     config = self.scout.profile()['config']
                     key = {'names': 'name_masking', 'addresses': 'address_masking',
-                           'languages': 'other_languages'}.get(option)
+                           'languages': 'other_languages', 'numbered': 'pseudonyms'}.get(option)
                     if key:
                         self.assertEqual(config[key], value)
                     elif option == 'mode':
@@ -106,7 +107,7 @@ class Commands(unittest.TestCase):
         self.configure()
         self.assertEqual(self.handle('names deep', **self.local),
                          'Saved: names basic → deep. Active from your next message — no restart needed.\n'
-                         'Deep is aggressive; noisy on Polish text: ≈49 false names per 100 PL texts.')
+                         'Deep is aggressive: 795 false names in 758 PL texts (104.9 per 100).')
         path = self.scout.root() / 'settings.json'
         before = (path.read_bytes(), path.stat().st_mtime_ns)
         for args in ('names zzz', 'names deep extra', 'masking yes', 'mode off', 'note maybe', 'unknown', 'status extra', 'help extra'):

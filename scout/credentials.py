@@ -145,21 +145,30 @@ def _random_payload(value):
 
 def _formatted_secret(value, before):
     """Long, delimited credential formats bypass the short-password length cap."""
-    bot = _TELEGRAM_TOKEN.fullmatch(value)
+    if len(value) < 16:
+        return False
+    bot = _TELEGRAM_TOKEN.fullmatch(value) if ':' in value else None
     if bot:
         return len(set(bot['payload'])) >= 10
-    match = _PREFIXED_TOKEN.fullmatch(value)
+    match = _PREFIXED_TOKEN.fullmatch(value) if '_' in value else None
     # Prefixed object IDs (evt_, ord_, inv_, trace_) stay readable: a generic prefix needs a key-like prefix or a key label.
     if match and not _KEY_PREFIX.search(value[:match.start('payload')]) and not _TOKEN_LABEL.search(_near_context(before)):
         match = None
-    if match is None and _TOKEN_LABEL.search(_near_context(before)):
+    if match is None and value.startswith('RCV-'):
         match = _CONTEXT_TOKEN.fullmatch(value)
+        if match and not _TOKEN_LABEL.search(_near_context(before)):
+            match = None
     return bool(match and _random_payload(match['payload']))
+
+
+_TRAILING_COMMA_RE = re.compile(r''',\s*(["'`]*)\s*$''')
+_ASSIGN_KEY_RE = re.compile(r'[A-Za-z_][\w.-]*')
+_INTERLEAVED_RE = re.compile(r'[A-Za-z]\d+[A-Za-z]|\d[A-Za-z]+\d')
 
 
 def _near_context(before):
     """Bounded context from the current field; split identifiers only when they label an assigned value."""
-    before = re.sub(r''',\s*(["'`]*)\s*$''', r' \1', before[-80:])
+    before = _TRAILING_COMMA_RE.sub(r' \1', before[-80:])
     before = _CONTEXT_BOUNDARY.split(before)[-1]
     field = _FIELD.search(before)
     if field:
@@ -231,10 +240,12 @@ def _cue_score(near):
 
 def _clean(text, start, end):
     """Strip wrapping quotes/brackets, markdown emphasis and trailing sentence punctuation; returns the inner span."""
-    inline = _INLINE_CODE.fullmatch(text[start:end])
-    if inline:
-        return start + inline.start(2), start + inline.end(2)
+    if '`' in text[start:end]:
+        inline = _INLINE_CODE.fullmatch(text[start:end])
+        if inline:
+            return start + inline.start(2), start + inline.end(2)
     for _ in range(3):
+        prev_start, prev_end = start, end
         while start < end and text[start] in _LEAD:
             start += 1
         while end > start and text[end - 1] in _TRAIL:
@@ -247,7 +258,11 @@ def _clean(text, start, end):
             end -= 2                                   # possessive: CUST2150050's
         if end - start >= 3 and text[start] == '*' and text[end - 1] == '*':
             start, end = start + 1, end - 1            # *emphasis*
-    if end > start and text[end - 1] in ')]}' and text[start - 1:start] in ('(', '[', '{'):
+        if start == prev_start and end == prev_end:
+            break
+    if end > start and text[end - 1] in ')]}' and (
+            text[start - 1:start] in ('(', '[', '{')
+            or text[end - 1] == ')' and '(' not in text[start:end] and re.search(r'(?i)\b(?:2fa|otp|mfa|one-time|pin|password|passwd|pwd|hasło|haslo)\b', text[max(0, start-48):start])):
         end -= 1
     return start, end
 
@@ -258,7 +273,7 @@ def _split_assignment(text, start, end):
     for sep in ('=', ':'):
         if sep in token:
             key, _, value = token.partition(sep)
-            if key and value and re.fullmatch(r'[A-Za-z_][\w.-]*', key):
+            if key and value and _ASSIGN_KEY_RE.fullmatch(key):
                 return start + len(key) + 1, key.replace('_', ' ')
     return start, ''
 
@@ -290,12 +305,17 @@ def shape_score(value):
     bits = -sum(n * math.log2(n / len(value)) for n in counts.values())
     if bits >= 30:
         score += 0.10
-    if re.search(r'[A-Za-z]\d+[A-Za-z]|\d[A-Za-z]+\d', value):
+    if _INTERLEAVED_RE.search(value):
         score += 0.10
     return score
 
 
 _INTERESTING = re.compile(r'[^\W\d_]').search
+_HEX_COLOUR = re.compile(r'#[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?')
+_COLOUR_CONTEXT = re.compile(r'(?i)\b(?:hex|colou?r|css)\b')
+_DISPLAY_MODE = re.compile(r'(?i)\d{3,5}[x×]\d{3,5}@\d{2,3}Hz')
+_DISPLAY_CONTEXT = re.compile(r'(?i)\b(?:display|screen|panel|resolution)\b')
+_FILE_GLOB = re.compile(r'[\w.*-]*\*[\w.*-]*\.[A-Za-z]{2,12}')
 
 
 def _code(value, before):
@@ -336,45 +356,64 @@ def _policy(value, cue):
 def candidates(text):
     """Yield (start, end, score, line_number, kind) for password-like tokens; kind is secret, code or pin."""
     line_starts = None
+    def line_context(m_start, v_start):
+        nonlocal line_starts
+        if line_starts is None:
+            line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
+        line = bisect.bisect_right(line_starts, m_start) - 1
+        return line, text[line_starts[line]:v_start]
+
     for match in _TOKEN.finditer(text):
         token = match.group()
         # Long prefixed credentials are checked before the short-password length cap.
         if token.isalpha() or len(token) < 4:
             continue
-        digits_only = token.strip(_LEAD + _TRAIL).isdigit()
+        digits_only = token.strip(_LEAD + _TRAIL + ')').isdigit()
         if not digits_only and not _INTERESTING(token):
             continue
         start, end = _clean(text, *match.span())
         if text[start - 1:start] in ('"', "'") and _FIELD_NAME_END.match(text, end):
             continue
-        value_start, _ = _split_assignment(text, start, end)
+        value_start, _ = (start, '') if re.search(r'(?i)\b(?:password|passwd|pwd|hasło|haslo|secret|token)[ \t]+(?:is|to)[ \t]*$', text[max(0, start-32):start]) else _split_assignment(text, start, end)
         if value_start > start:            # "key:`value`": clean the value part as well
             value_start, end = _clean(text, value_start, end)
         value = text[value_start:end]
-        if line_starts is None:
-            line_starts = [0] + [m.end() for m in re.finditer('\n', text)]
-        line = bisect.bisect_right(line_starts, match.start()) - 1
-        before = text[line_starts[line]:value_start]
-        if _formatted_secret(value, before):
-            yield value_start, end, 0.99, line, 'secret'
-            continue
+        if len(value) >= 16 and (':' in value or '_' in value or value.startswith('RCV-')):
+            line, before = line_context(match.start(), value_start)
+            if _formatted_secret(value, before):
+                yield value_start, end, 0.99, line, 'secret'
+                continue
         if value.isdigit():
-            found = _code(value, before)
-            if found:
-                yield value_start, end, found[1], line, found[0]
+            if 4 <= len(value) <= 8:
+                line, before = line_context(match.start(), value_start)
+                found = _code(value, before)
+                if found:
+                    yield value_start, end, found[1], line, found[0]
             continue
         if not MIN_LEN <= len(value) <= MAX_LEN or value.isalpha():
             continue
         shape = shape_score(value)
         if shape is None or shape == 0.0:
             continue
+        line, before = line_context(match.start(), value_start)
         near = _near_context(before)
+        if not _direct_cue(near, STRONG):
+            if _HEX_COLOUR.fullmatch(value) and _COLOUR_CONTEXT.search(near):
+                continue
+            if _DISPLAY_MODE.fullmatch(value) and _DISPLAY_CONTEXT.search(near):
+                continue
+            if _FILE_GLOB.fullmatch(value) and re.search(r'(?i)\b(?:files?|logs?|from|in)\s+(?:the\s+)?$', near):
+                continue
         if _ID_LABEL.search(near) and all(c.isalnum() or c in _WEAK_SYMBOLS for c in value):
             continue
         if _BUSINESS_ID.fullmatch(value) and not (
                 _direct_cue(near, _SECRET_LABEL) or _AUTH_TOKEN_LABEL.search(near)):
             continue
         cue = _cue_score(near)
+        if re.fullmatch(r'[A-Z0-9]{4}-[A-Z0-9]{4}', value) and any(c.isdigit() for c in value) and any(c.isalpha() for c in value):
+            if re.search(r'(?i)\b(?:2fa|otp|mfa|one-time|jednorazow\w*)[ \t]+(?:[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż0-9-]+[ \t]+){0,4}(?:code|kod)(?:[ \t]+do[ \t]+logowania)?[ \t]*(?:is|to|:|=)[ \t]*$', before):
+                yield value_start, end, 0.85, line, 'code'
+                continue
         if _SOFT.match(value):
             if cue < 0.40 or not _direct_cue(near, STRONG):
                 continue

@@ -30,6 +30,8 @@ def main(argv=None):
     conf.add_argument('--basal-url', default=None, help='Local basal engine, e.g. http://127.0.0.1:8765 (loopback only); empty string removes it')
     conf.add_argument('--name-masking', choices=['off', 'basic', 'deep'], default=None)
     conf.add_argument('--other-languages', choices=['off', 'on'], default=None)
+    conf.add_argument('--pseudonyms', choices=['off', 'on'], default=None,
+                      help='Number name/contact masks; nothing is restored (default: off).')
     conf.add_argument('--address-masking', choices=['off', 'on'], default=None)
     conf.add_argument('--guard-mode', choices=['closed', 'open'], default=None,
                       help='Scan-failure policy for this profile: closed (default) withholds content that could not be scanned; open passes it through unmasked')
@@ -137,10 +139,12 @@ def main(argv=None):
                                   answer_marker=args.answer_marker, basal_url=args.basal_url, basal_descriptions=descriptions,
                                   guard_mode=args.guard_mode, name_masking=args.name_masking, address_masking=args.address_masking,
                                   other_languages=args.other_languages,
+                                  pseudonyms=args.pseudonyms,
                                   persist_observation=None if args.insights is None else args.insights == 'on')
             result = dict(status='CONFIGURED', mode=args.mode,
                           effective_scope={k:v for k,v in scout.profile()['config'].get('grants',{}).items()}, title_risk=scout.title_risk())
             result.update(name_masking=scout.profile()['config'].get('name_masking', 'off'), address_masking=scout.profile()['config'].get('address_masking', 'on'), other_languages=scout.profile()['config'].get('other_languages', 'off'))
+            result['pseudonyms'] = scout.profile()['config'].get('pseudonyms', 'off')
             if scout.profile()['config'].get('guard_mode') == 'open':
                 result['guard_notice'] = ('guard_mode=open: content that cannot be scanned is passed through unmasked '
                                           'for this profile. Restore the default with --guard-mode closed.')
@@ -154,7 +158,7 @@ def main(argv=None):
             decisions_path = scout.root()/'decisions.json'
             entries = storage.read_json(decisions_path) if decisions_path.is_file() else []
             outcome = next((e.get('outcome') for e in reversed(entries) if (e.get('outcome') or {}).get('validation_curve')), None)
-            print(json.dumps(dict(mode=config['mode'], insights=menu.state_for(scout)['insights'], name_masking=config.get('name_masking', 'off'), address_masking=config.get('address_masking', 'on'), other_languages=config.get('other_languages', 'off'), grants=config.get('grants',{}),
+            print(json.dumps(dict(mode=config['mode'], pseudonyms=config.get('pseudonyms', 'off'), insights=menu.state_for(scout)['insights'], name_masking=config.get('name_masking', 'off'), address_masking=config.get('address_masking', 'on'), other_languages=config.get('other_languages', 'off'), grants=config.get('grants',{}),
                                   effective_scope=config.get('grants',{}), title_risk=scout.title_risk(), validation_curve=outcome.get('validation_curve') if outcome else None)))
         elif args.command == 'delete':
             if not args.confirm_delete:

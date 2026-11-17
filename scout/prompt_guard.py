@@ -4,7 +4,7 @@ from contextvars import ContextVar
 import hashlib
 import json
 
-from . import basal, credentials, privacy, storage, tool_guard, insights
+from . import basal, credentials, privacy, storage, tool_guard, insights, pseudonyms
 from .tool_guard import MAX_INPUT_CHARS
 
 # One basal checker (one shared time budget) per provider request: every block and message of a request uses it.
@@ -29,6 +29,7 @@ class PromptGuard:
         name_masking = config.get('name_masking', 'off')
         address_masking = config.get('address_masking', 'on')
         other_languages = config.get('other_languages', 'off')
+        book = self.scout.numbered_masks() if config.get('pseudonyms', 'off') == 'on' else None
         engine = config.get('basal_url') if names and isinstance(config, dict) else None
         # User prompts get prompt thresholds and the optional basal check; other roles (system prompt, history
         # already masked as tool results) use the deterministic text thresholds, so basal is not re-asked each turn.
@@ -40,13 +41,21 @@ class PromptGuard:
         # for a main-request scan with it.
         key = hashlib.sha256('\0'.join(('N' if names else '-', str(name_masking), str(address_masking), str(other_languages), str(field or ''), str(engine or ''),
                                         'B' if check else '0', text)).encode('utf-8', 'surrogatepass')).digest()
+        if book is not None:
+            # Plain-mask cache entries cannot stand in for numbered scans. Holding
+            # the table in the key also prevents identity reuse after profile deletion.
+            key = (book, key)
         if key in self.cache:
             return self.cache[key]
         state = {'degraded': False}
+        if book is not None:
+            book.reserve(text)
         context = credentials.CONTEXT.set(('prompt' if names else 'text', check, state))
+        numbered = pseudonyms.CURRENT.set(book)
         try:
             masked, categories = privacy.mask_local_details(text, names=names, field=field, name_masking=name_masking, address_masking=address_masking, other_languages=other_languages)
         finally:
+            pseudonyms.CURRENT.reset(numbered)
             credentials.CONTEXT.reset(context)
         result = (masked, tuple(sorted(categories)))
         if not state['degraded']:          # a scan cut short by a basal failure or budget is not remembered
@@ -225,6 +234,8 @@ class PromptGuard:
             token = _REQUEST_CHECK.set(basal.credential_checker(config) or _NO_BASAL)
             guard = tool_guard.GUARD_OPEN.set(guard_open)
             try:
+                if config.get('pseudonyms', 'off') == 'on':
+                    self.scout.numbered_masks().reserve(request)
                 return self.transform(request)
             finally:
                 tool_guard.GUARD_OPEN.reset(guard)
@@ -261,6 +272,8 @@ class PromptGuard:
         try:
             if not isinstance(request_messages, list):
                 return
+            if config and config.get('pseudonyms', 'off') == 'on':
+                self.scout.numbered_masks().reserve(request_messages)
             for item in request_messages:
                 if not isinstance(item, dict):
                     continue

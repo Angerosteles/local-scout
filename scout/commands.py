@@ -7,10 +7,11 @@ from . import menu
 HELP = '\n'.join((
     '/scout status | details | help',
     '/scout masking on|off · names off|basic|deep · addresses on|off',
-    '/scout languages on|off · insights on|off · note on|off'))
+    '/scout languages on|off · insights on|off · note on|off',
+    '/scout numbered on|off (numbered masks; nothing is restored)'))
 # Chat names for menu settings; 'note' is the reply note (mode report/background).
 NAMES = {'masking': 'masking', 'names': 'names', 'addresses': 'addresses', 'languages': 'languages',
-         'insights': 'insights', 'note': 'mode'}
+         'insights': 'insights', 'note': 'mode', 'numbered': 'numbered'}
 LOCAL_ONLY = 'Settings can only be changed in a local terminal session.\nUse hermes scout setup locally.'
 LOCAL_PLATFORMS = ('cli', 'tui', 'local')
 
@@ -32,12 +33,13 @@ def status(scout):
     state = menu.state_for(scout)
     on = menu.display
     settings = (f"addresses {on(state['addresses'])} · other languages {on(state['languages'])} · "
-                f"insights {on(state['insights'])} · reply note {on(state['mode'], 'mode')}")
+                f"insights {on(state['insights'])} · reply note {on(state['mode'], 'mode')} · "
+                f"numbered masks {on(state['numbered'])} (no restoration)")
     head = (['Local Scout: masking on', *menu.summary(state), 'Settings: ' + settings] if state['masking'] else
             ['Local Scout: masking off — nothing is masked; data reaches the model as typed.',
              f"When on: names {state['names']} · " + settings])
     return '\n'.join(menu._wrap([*head,
-        f'Synthetic test, {menu.HOLDOUT_TEXTS:,} texts. More: /scout details · Commands: /scout help'], 80))
+        f'Own synthetic test, {menu.HOLDOUT_TEXTS:,} texts; not a guarantee. More: /scout details · /scout help'], 80))
 
 
 def details_text():

@@ -222,7 +222,7 @@ def full_coverage(detector, text, field=None):
     n = len(detector._field_probe(field))
     found = [(max(s,n)-n, e-n, c) for s,e,c in captured if e>n]
     if index is not None:
-        found = [(index[s],index[e-1]+1,c) for s,e,c in found if e>s]
+        found = [(index[s],(index.ends[e-1] if hasattr(index,'ends') else index[e-1]+1),c) for s,e,c in found if e>s]
     regions = []
     for s,e,c in sorted(found, key=lambda x:(x[0],-(x[1]-x[0]))):
         if regions and s < regions[-1][1]:

@@ -85,8 +85,11 @@ class Model:
 
 _SENT_END_RE, _URL_RE = re.compile(r'^[.!?\n]'), re.compile(r'https?://|www\.|@')
 _GAP_PUNCT_RE = re.compile(r'[.!?\n:]')
+_DIGIT_RE = re.compile(r'\d')
+_CODE_CHARS_RE = re.compile(r'[{}[\]=<>;/_`]')
 _CODE_CHARS = frozenset('{}[]=<>;/_`')
 _CUES = frozenset('agent and applicant attention attn author by cc client contact customer dear dr employee from hello hi madam manager member miss mr mrs ms name names owner patient prof regards signed sincerely sir tenant to with'.split())
+_ZERO4 = (0., 0., 0., 0.)
 
 
 def token_features(text, toks, i, freq):
@@ -95,9 +98,9 @@ def token_features(text, toks, i, freq):
     after = text[e:toks[i+1][0]] if i+1 < len(toks) else text[e:]
     local = text[max(0, s-40):min(len(text), e+40)]
     out = [min(len(w), 32)/32, float(w.istitle()), float(not w.istitle() and not w.isupper()),
-           float('-' in w), float(any(c.isdigit() for c in local)), math.log2(1+freq.get(w.lower(), 0)),
+           float('-' in w), float(bool(_DIGIT_RE.search(local))), math.log2(1+freq.get(w.lower(), 0)),
            float(i+1 == len(toks) or bool(_SENT_END_RE.search(after))),
-           float(any(c in _CODE_CHARS for c in local)), float(bool(_URL_RE.search(local))), float('.' in before)]
+           float(bool(_CODE_CHARS_RE.search(local))), float(bool(_URL_RE.search(local))), float('.' in before)]
     for delta in (-2, -1, 1, 2):
         k = i+delta
         exists = 0 <= k < len(toks)
@@ -150,6 +153,7 @@ class Backend:
         self.data = data
         self.model = Model(data, feature_names=FEATURES)
         self.outside = [name.split(':', 2)[1:] for name in FEATURES if name.startswith('outside:')]
+        self._outside_int = tuple((int(d), exp) for d, exp in self.outside)
         self.threshold = data['threshold'] if threshold is None else threshold
         self.propagate, self.multi_only = propagate, multi_only
         if not 0 <= self.threshold <= 1 or not 0 <= data['seed_threshold'] <= 1:
@@ -198,17 +202,21 @@ class Backend:
                 float(bool(_QUOTE_AFTER_RE.match(after))),
                 float(i > 0 and toks[i-1][2].istitle() and before == ' '),
                 float(j+1 < len(toks) and toks[j+1][2].istitle() and after == ' ')]
-            counts = [bg_log.get(w.casefold(), (0., 0., 0., 0.)) for w in words]
-            for field in range(4):
-                values = [c[field] for c in counts]
-                if field == 3:
-                    vector.append(min(values))
-                vector += [sum(values)/len(values), max(values)]
-            for delta, expected in self.outside:
-                delta = int(delta)
+            if len(words) == 1:
+                c0, c1, c2, c3 = bg_log.get(words[0].casefold(), _ZERO4)
+                vector += [c0, c0, c1, c1, c2, c2, c3, c3, c3]
+            else:
+                counts = [bg_log.get(w.casefold(), _ZERO4) for w in words]
+                for field in range(4):
+                    values = [c[field] for c in counts]
+                    if field == 3:
+                        vector.append(min(values))
+                    vector += [sum(values)/len(values), max(values)]
+            n_toks = len(toks)
+            for delta, expected in self._outside_int:
                 k = i+delta if delta < 0 else j+delta
-                word = toks[k][2] if 0 <= k < len(toks) else ''
-                vector.append(float(word.islower() and word.casefold() == expected))
+                word = toks[k][2] if 0 <= k < n_toks else ''
+                vector.append(float(word == expected or (word.islower() and word.casefold() == expected)))
             out.append(((s, e), vector))
         return toks, out
 

@@ -5,26 +5,29 @@ import textwrap
 
 from . import insights
 
-# Frozen 1.8.0 synthetic holdout, see docs/EVIDENCE.md: 1,503 texts, 200 labelled values per type.
-HOLDOUT_TEXTS, VALUES = 1503, 200
-# Type, values fully masked (of 200), visible false masks over all 1,503 texts (secret includes 1 PIN span).
-STRUCTURED = (('e-mail', 200, 36), ('PESEL', 200, 0), ('card number', 195, 8), ('SSN', 197, 1),
-              ('IBAN', 187, 0), ('phone', 165, 9), ('password/PIN/key', 136, 13), ('address', 114, 10))
+# Blind synthetic holdout v2, 1.9.0; basic names, addresses on, other languages off. See docs/EVIDENCE.md.
+HOLDOUT_TEXTS = 2400
+# Type, fully masked values, labelled target values, visible false masks across all texts.
+STRUCTURED = (('e-mail', 200, 200, 32), ('PESEL', 212, 230, 0), ('card number', 200, 200, 2),
+              ('SSN', 209, 230, 0), ('IBAN', 200, 200, 0), ('phone', 230, 230, 1),
+              ('password/PIN/key', 199, 230, 19), ('address', 199, 230, 6))
 # Language: full names, all name mentions, texts. Per mode: full masked, all masked, false names.
-NAME_TOTALS = {'EN': (319, 793, 973), 'PL': (191, 410, 470)}
-NAMES = {'basic': {'EN': (255, 369, 36), 'PL': (112, 176, 28)},
-         'deep': {'EN': (255, 505, 82), 'PL': (112, 247, 229)}}
+NAME_TOTALS = {'EN': (272, 827, 1582), 'PL': (132, 412, 758)}
+NAMES = {'basic': {'EN': (233, 462, 252), 'PL': (90, 162, 178)},
+         'deep': {'EN': (233, 579, 310), 'PL': (90, 216, 795)}}
 SCOPES = ('observe', 'report', 'mask', 'insights')
-SETTINGS = ('masking', 'names', 'addresses', 'languages', 'insights', 'mode')
+SETTINGS = ('masking', 'names', 'addresses', 'languages', 'insights', 'mode', 'numbered')
 ROWS = SETTINGS + ('details', 'save', 'cancel')
-LABELS = {'languages': 'Other languages', 'mode': 'Reply note'}
+LABELS = {'languages': 'Other languages', 'mode': 'Reply note', 'numbered': 'Numbered masks'}
 # 'mode' is shown as the reply note: report = note on, background = note off; on_demand stays a CLI/triage mode.
 OPTIONS = {'names': ('off', 'basic', 'deep'), 'mode': ('report', 'background')}
 NOTE = {'report': 'on', 'background': 'off', 'on_demand': 'off (triage)'}
-DEEP_WARNING = 'Deep is aggressive; noisy on Polish text: ≈49 false names per 100 PL texts.'
+DEEP_WARNING = 'Deep is aggressive: 795 false names in 758 PL texts (104.9 per 100).'
 HELP = '↑↓ move · ENTER/SPACE change · s save · q quit'
 DETAILS_HELP = 'ENTER or ESC returns · full counts: docs/EVIDENCE.md'
 DESCRIPTIONS = {
+    'numbered': {True: 'Use [EMAIL_1] etc.; equal tokens mean equal values. Nothing is restored.',
+                 False: 'Plain masks. Turn on to number names and contacts. Nothing is restored.'},
     'masking': {True: 'Replace detected data with placeholders before the model sees it.',
                 False: 'Scout is off: nothing is masked, noted or counted.'},
     'names': {'off': 'Names stay visible. Turn on to mask names in your prompts (not tool results).',
@@ -50,7 +53,8 @@ def _percent(count, total):
 
 
 def _per100(count, texts):
-    return '0' if count == 0 else f'{100 * count / texts:.1f}'
+    rate = 100 * count / texts
+    return '0' if count == 0 else (f'{rate:.2f}' if rate < 0.1 else f'{rate:.1f}')
 
 
 def _span(values, suffix=''):
@@ -63,9 +67,9 @@ def summary(state):
     if not state['masking']:
         return ['Masking off: nothing is masked; data reaches the model as typed.']
     types = [row for row in STRUCTURED if state['addresses'] or row[0] != 'address']
-    lines = ['Masks: ' + ', '.join(name for name, _, _ in types),
-             f"  {_span([_percent(n, VALUES) for _, n, _ in types], '%')} detected · "
-             f"{_span([_per100(f, HOLDOUT_TEXTS) for _, _, f in types])} false masks per 100 texts"]
+    lines = ['Masks: ' + ', '.join(name for name, _, _, _ in types),
+             f"  Our test: {_span([_percent(n, total) for _, n, total, _ in types], '%')} masked · "
+             f"{_span([_per100(f, HOLDOUT_TEXTS) for _, _, _, f in types])} false masks per 100 texts"]
     names = state['names']
     if names == 'off':
         lines.append('Names: off (optional; only in your prompts)')
@@ -82,26 +86,28 @@ def summary(state):
 def details(width=80):
     """Every measured type in one table: header, rows, notes (no blank lines inside a part)."""
     header = ['Local Scout · measurements',
-              f'Synthetic test, {HOLDOUT_TEXTS:,} texts written without the code: per type {VALUES} values',
-              'to mask and 50 lookalikes to keep. Detected = value fully masked.',
-              'False mask = masked text that was not that data, per 100 texts.']
+              f'Own blind synthetic test, {HOLDOUT_TEXTS:,} texts; real data will score lower.',
+              'Measured with basic names, addresses on, other languages off.',
+              'Detected = fully masked values. Each type has 50 lookalike traps.',
+              'False = unlabelled spans / texts; rate per 100 texts.']
     notes = ['Names: only in your prompts; false masks per 100 EN or PL texts.',
              'Names, addresses: EN and PL. CVV: masked after a label, not measured.']
     names = [(f'{mode} {lang}', full, every, false) + NAME_TOTALS[lang]
              for mode, langs in NAMES.items() for lang, (full, every, false) in langs.items()]
     if width < 62:  # compact rows instead of columns that would wrap
-        rows = ['  type: detected · false masks / 100 texts']
-        rows += [f'  {name}: {_percent(n, VALUES)}% · {_per100(f, HOLDOUT_TEXTS)}' for name, n, f in STRUCTURED]
-        rows += ['  names (optional): full · all · false / 100']
-        rows += [f'  {name}: {_percent(full, tf)}% · {_percent(every, ta)}% · {_per100(false, texts)}'
-                 for name, full, every, false, tf, ta, texts in names]
+        rows = ['  type: detected · false / texts']
+        rows += [f'  {name}: {n}/{total} · {f}/{HOLDOUT_TEXTS}' for name, n, total, f in STRUCTURED]
+        rows += ['  names (optional): full · all']
+        for name, full, every, false, tf, ta, texts in names:
+            rows += [f'  {name}: {full}/{tf} · {every}/{ta}',
+                     f'    false {false}/{texts} ({_per100(false, texts)}/100)']
         return header, rows, notes
-    rows = [f"  {'Type':<18}{'Detected':<15}False masks / 100 texts"]
-    rows += [f'  {name:<18}{f"{n}/{VALUES}":<8}{_percent(n, VALUES):>4}%   {_per100(f, HOLDOUT_TEXTS)}'
-             for name, n, f in STRUCTURED]
-    rows += [f"  {'Names (optional)':<18}{'Full names':<15}{'All names':<15}False / 100"]
+    rows = [f"  {'Type':<18}{'Detected':<15}False / texts · /100"]
+    rows += [f'  {name:<18}{f"{n}/{total}":<8}{_percent(n, total):>4}%   {f}/{HOLDOUT_TEXTS} · {_per100(f, HOLDOUT_TEXTS)}'
+             for name, n, total, f in STRUCTURED]
+    rows += [f"  {'Names (optional)':<18}{'Full names':<15}{'All names':<15}False / texts · /100"]
     rows += [f'  {name:<18}{f"{full}/{tf}":<8}{_percent(full, tf):>4}%  '
-             f'{f"{every}/{ta}":<8}{_percent(every, ta):>4}%  {_per100(false, texts)}'
+             f'{f"{every}/{ta}":<8}{_percent(every, ta):>4}%  {false}/{texts} · {_per100(false, texts)}'
              for name, full, every, false, tf, ta, texts in names]
     return header, rows, notes
 
@@ -114,6 +120,7 @@ def state_for(scout):
                 names=config.get('name_masking', 'off'),
                 addresses=config.get('address_masking', 'on') == 'on',
                 languages=config.get('other_languages', 'off') == 'on',
+                numbered=config.get('pseudonyms', 'off') == 'on',
                 insights=mode != 'off' and insights.collection_enabled(config),
                 mode=mode if mode != 'off' else 'report')
 
@@ -164,7 +171,7 @@ def render(state, index=0, width=80, confirming=False):
     """Render complete text at at most 80 columns; narrow screens reflow."""
     width = max(1, min(80, width))
     header = ['Local Scout setup', *summary(state),
-              f'Synthetic test, {HOLDOUT_TEXTS:,} texts; Details shows every type.']
+              f'Own synthetic test, {HOLDOUT_TEXTS:,} texts; not a guarantee. Details: every type.']
     body = []
     for i, name in enumerate(ROWS):
         text = label(name)
@@ -213,7 +220,8 @@ def command_and_grants(scout, state, changed=None):
     approvals = ','.join(f'{scope}@{target}' for scope, targets in sorted(grants.items()) for target in (targets or ['']))
     args = ['scout', 'configure', '--mode', mode, '--approve', approvals,
             '--name-masking', state['names'], '--address-masking', 'on' if state['addresses'] else 'off',
-            '--other-languages', 'on' if state['languages'] else 'off']
+            '--other-languages', 'on' if state['languages'] else 'off',
+            '--pseudonyms', 'on' if state['numbered'] else 'off']
     persist = state['insights'] if changed in (None, 'insights') else config.get('persist_observation')
     if persist is not None:
         args += ['--insights', 'on' if persist else 'off']
@@ -227,6 +235,7 @@ def save_state(scout, state, previous, changed=None):
     scout.configure_local(mode, grants=grants, name_masking=state['names'],
                           address_masking='on' if state['addresses'] else 'off',
                           other_languages='on' if state['languages'] else 'off',
+                          pseudonyms='on' if state['numbered'] else 'off',
                           retention_days=config.get('retention_days', 30),
                           synthetic_pii=config.get('synthetic_pii', False),
                           persist_observation=state['insights'] if changed in (None, 'insights')
@@ -235,7 +244,7 @@ def save_state(scout, state, previous, changed=None):
                for k in SETTINGS if previous[k] != state[k]]
     messages = ['Saved: ' + (', '.join(changes) or 'profile defaults') +
                 '. Active from your next message — no restart needed.']
-    if previous['masking'] != state['masking']:
+    if previous['masking'] != state['masking'] or previous['numbered'] != state['numbered']:
         messages.append('The masking system-prompt section updates in a new session.')
     if state['names'] == 'deep' and changed == 'names':
         messages.append(DEEP_WARNING)

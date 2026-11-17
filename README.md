@@ -21,7 +21,7 @@ Enabling the plugin in Hermes enables local masking of detected structured data 
 
 Scout replaces detected e-mails, phones, cards and CVVs, IBANs, PESEL and SSN numbers, addresses, API keys and other secrets with placeholders. **Passwords, 2FA codes and PINs without a known format** (`use IkXzYx33@$`, `Your verification code is 482913`) become `[SECRET]`, `[CODE]` and `[PIN]`, judged by their shape, nearby cue words and the usual norms, while URLs, IDs and code stay readable. An optional local basal engine gives a second opinion on uncertain ones ([method and limits](docs/EVIDENCE.md#passwords-and-pins)). Person-name masking applies to user prompts. Supported paths include file and terminal results, MCP tool results, conversation text, system instructions and tool-call arguments; auxiliary calls such as session titles receive best-effort masking too. No network calls (an optional basal engine is reached on loopback only), no GPU.
 
-**Masking is one-way.** Placeholders are not restored in replies or outgoing arguments. The model cannot address an e-mail using `[EMAIL]`. Scout registers the `masking` skill when supported. With profile masking enabled, it also adds a short system-prompt section for new sessions. The guidance says to preserve masks, avoid guessing originals, distinguish people by role, and ask for local completion. These are instructions to the model, not reversible substitution. Numbered pseudonyms and user-requested reversible substitution are planned for 1.9; neither ships in 1.8.0.
+**Masking is one-way.** Placeholders are not restored in replies or outgoing arguments. The model cannot address an e-mail using `[EMAIL]`. Scout registers the `masking` skill when supported. With profile masking enabled, it also adds a short system-prompt section for new sessions. The guidance says to preserve masks, avoid guessing originals, distinguish people by role, and ask for local completion. These are instructions to the model, not reversible substitution. Optional numbered masks in 1.9 remain one-way; nothing is restored.
 
 Customer, order and ticket IDs, dates, e-mail subjects and **person names in tool results** stay readable. Work by ID, then look up the address in your own system. Source files remain unchanged, and Scout does not prevent an agent from transferring a file it can read. [Data handling and security scope](docs/SECURITY.md).
 
@@ -85,22 +85,25 @@ scout configure --mode off
 
 ## Evidence you can inspect
 
-The 1.8.0 frozen holdout contains 1,503 synthetic texts built without access to the code. Counts below are fully masked values; false alarms are separate. Counts are from the release; the English title fix and the removal of a small Polish given-name list were measured after the blind run (see EVIDENCE, measurement stages). They are sample results, not protection guarantees.
+**Blind synthetic holdout v2: 2,400 texts**, independently built without detector code, frozen 15 November and measured once on 17 November 2026 against 1.8.0 and 1.9.0. Counts are fully masked target values, with trap false alarms separate. The test uses basic names, addresses on and other languages off; names are off by default in the product. These are results on our own synthetic set, not protection guarantees: expect lower detection on real data, and 100% here means every test value, not every possible value. The full holdout v2 will be published with Local Scout 2.0.
 
-| Category | 1.7.5 fully masked | 1.8.0 fully masked | Traps with this false mask, 1.7.5 → 1.8.0 |
-|---|---:|---:|---:|
-| E-mail | 200/200 | 200/200 | 26/50 → 26/50 |
-| PESEL | 200/200 | 200/200 | 0/50 → 0/50 |
-| Card | 195/200 | 195/200 | 4/50 → 4/50 |
-| SSN | 197/200 | 197/200 | 0/50 → 0/50 |
-| IBAN | 187/200 | 187/200 | 0/50 → 0/50 |
-| Phone | 106/200 | 165/200 | 4/50 → 6/50 |
-| Secret | 125/200 | 136/200 | 4/50 → 4/50 |
-| Address | 55/200 | 114/200 | 1/50 → 5/50 |
+On the English part of the same texts, Microsoft Presidio in its default configuration masks fewer structured values and addresses with more false masks and has no secret detection, but is clearly better on person names ([comparison](docs/EVIDENCE.md#comparison-with-microsoft-presidio)).
 
-With names turned on, `basic` fully masked 255/319 English and 112/191 Polish full names (1.7.5: 175/319 and 37/191) with 3.7 and 6.0 false `[NAME]` per 100 texts (1.7.5: 23.5 and 63.6); `deep` masked 505/793 English and 247/410 Polish name mentions with 8.4 and 48.7 false names per 100 texts.
+| Category | 1.8.0 fully masked | 1.9.0 fully masked | 1.9.0 partly (inclusive) | Trap texts with this false mask, 1.8.0 → 1.9.0 |
+| --- | --- | --- | --- | --- |
+| email | 200/200 | 200/200 | 200/200 | 14/50 → 14/50 |
+| pesel | 200/230 | 212/230 | 212/230 | 0/50 → 0/50 |
+| card | 199/200 | 200/200 | 200/200 | 0/50 → 0/50 |
+| ssn | 199/230 | 209/230 | 209/230 | 0/50 → 0/50 |
+| iban | 200/200 | 200/200 | 200/200 | 0/50 → 0/50 |
+| phone | 230/230 | 230/230 | 230/230 | 0/50 → 0/50 |
+| secret | 175/230 | 199/230 | 204/230 | 0/50 → 1/50 |
+| address | 158/230 | 199/230 | 228/230 | 1/50 → 1/50 |
+| name | 166/300 | 166/300 | 168/300 | 8/50 → 8/50 |
 
-The holdout exposed a basic-mode English title bug: 10/94 titled mentions in the blind run on the first release candidate, then 79/94 after the fix of English titled names and a re-run on the release candidate. The corrected title result is no longer blind; the later removal of a Polish given-name list lowered PL full names from 123/191 to 112/191; other counts stayed the same. International addresses remain a gap (0/28 in DE/FR/ES/IT with either language setting), and 26/50 technical e-mail traps are masked. [Full tables, definitions and protocol](docs/EVIDENCE.md#180-frozen-holdout), [how detection works](docs/EVIDENCE.md#how-detection-works-and-how-we-measure-it). Earlier injection, triage, speed and integration measurements remain in the explicitly historical sections of EVIDENCE.
+Names are unchanged: basic fully masks EN full names 233/272 and PL full names 90/132; all mentions 462/827 EN and 162/412 PL. Deep masks 579/827 EN and 216/412 PL mentions. False names: basic 252/1,582 EN texts and 178/758 PL texts; deep 310/1,582 and 795/758. Deep is especially noisy on Polish text.
+
+With basic names, all false spans fall 499/2,400 → 491/2,400 texts, but secrets gain one false mask in an English trap. International addresses rise 0/12 → 10/12 in 60 DE/FR/ES/IT texts. In the separate 210-text obfuscation test, HTML/URL normalization improves; base64, digits written as words and spaced letters remain unsupported. Deep loses one single-name mention in the HTML-entity group (3/3 → 2/3). The old 1,503-text holdout and Gretel were used to tune 1.9 and are **development sets, not blind evidence**. [Tables, definitions and protocol](docs/EVIDENCE.md#blind-holdout-v2-190), [how detection works](docs/EVIDENCE.md#how-detection-works-and-how-we-measure-it), [1.9.0 changes](CHANGELOG.md#190--2026-11-17).
 
 ## Limits and disclosures
 
@@ -113,10 +116,14 @@ The holdout exposed a basic-mode English title bug: 10/94 titled mentions in the
 
 ## What's next?
 
-Numbered masks with local, reversible substitution are planned for 1.9. The triage cascade, teacher loop and multimodal work are experiments outside 1.8.0; see [historical evidence](docs/EVIDENCE.md#triage-on-real-data-basal-and-the-cascade-measured-offline).
+Numbered masks in 1.9 are optional and one-way; restoration is outside this release. The triage cascade, teacher loop and multimodal work are experiments outside 1.9.0; see [historical evidence](docs/EVIDENCE.md#triage-on-real-data-basal-and-the-cascade-measured-offline).
 
 ## How it was built
 
 Local Scout was designed and directed by The Loose Goose (Angerosteles on GitHub): the idea, the product decisions, the quality bar, the password cascade, testing in Hermes and the demo. It was built with AI assistance. Claude (Anthropic) wrote most of the code, tests and documentation and coordinated the work. OpenAI models (through Codex and ChatGPT) and Google Gemini did independent reviews, bug hunts and experiments; "Sol", "Terra" and "Argon" in the evidence are these AI reviewers. All measurements were run locally on the published code.
 
 Local Scout is [MIT licensed](LICENSE). Thanks to Remigiusz Kinas for basal; dataset, dependency and optional-model attributions are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Numbered masks (1.9, default off)
+
+Use `/scout numbered on` in a local terminal, the **Numbered masks** setup row, or `hermes scout configure --mode report --pseudonyms on`. NAME, EMAIL, PHONE and ADDRESS use tokens such as `[NAME_1]` and `[EMAIL_1]` for the same detected regions. Equal tokens mean equal exact values within a category, profile and process; different spellings remain separate and numbers in different categories are unrelated. Regions overlapping secrets or other sensitive categories keep plain masks. Nothing is restored in replies, tool arguments, files or history; streaming is unchanged. This supports grouping and drafts, not resolving real recipients. See [limits and restart behavior](docs/CONFIGURATION.md#numbered-masks).

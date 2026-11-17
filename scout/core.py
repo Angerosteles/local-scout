@@ -11,7 +11,7 @@ import shutil
 import threading
 import time
 
-from . import basal, credentials, privacy, storage, decisions, tool_guard, insights
+from . import basal, credentials, privacy, storage, decisions, tool_guard, insights, pseudonyms
 from .profile import facts, GUIDE
 from .observer import extract
 from .calculator import calculate
@@ -95,8 +95,18 @@ class Scout:
             config.setdefault('persist_observation', False)
         return config
 
+    def numbered_masks(self):
+        """Keep the same table across on/off toggles for this profile/process."""
+        with self.lock:
+            state = self.profile()
+            if state['config'].get('pseudonyms', 'off') != 'on':
+                return None
+            if 'numbered_masks' not in state:
+                state['numbered_masks'] = pseudonyms.Pseudonyms()
+            return state['numbered_masks']
+
     def configure_local(self, mode='off', grants=None, sources=None, retention_days=30, basal_url=None, basal_descriptions=None,
-                        synthetic_pii=False, answer_task=None, answer_marker=None, guard_mode=None, name_masking=None, address_masking=None, other_languages=None, persist_observation=None):
+                        synthetic_pii=False, answer_task=None, answer_marker=None, guard_mode=None, name_masking=None, address_masking=None, other_languages=None, persist_observation=None, pseudonyms=None):
         """Trusted local UI/CLI only; never registered as an agent tool."""
         mode = 'background' if mode == 'on' else mode
         if mode not in ('off', 'background', 'report', 'on_demand') or not 1 <= retention_days <= 30 or type(synthetic_pii) is not bool:
@@ -145,7 +155,8 @@ class Scout:
                     config.pop('basal_url', None)
             for key, value, choices in (('name_masking', name_masking, ('off', 'basic', 'deep')),
                                         ('address_masking', address_masking, ('off', 'on')),
-                                        ('other_languages', other_languages, ('off', 'on'))):
+                                        ('other_languages', other_languages, ('off', 'on')),
+                                        ('pseudonyms', pseudonyms, ('off', 'on'))):
                 if value is not None:
                     if value not in choices:
                         raise ValueError('invalid ' + key)
@@ -520,13 +531,18 @@ class Scout:
                     masking_off = True
                     return None
                 event_id = secrets.token_hex(8)
+                book = self.numbered_masks() if config.get('pseudonyms', 'off') == 'on' else None
+                if book is not None:
+                    book.reserve(value)
                 context = credentials.CONTEXT.set(('terminal' if source == 'terminal' else 'text', basal.credential_checker(config)))
                 address = tool_guard.ADDRESS_MASKING.set(config.get('address_masking', 'on'))
                 other = tool_guard.OTHER_LANGUAGES.set(config.get('other_languages', 'off'))
                 guard = tool_guard.GUARD_OPEN.set(config.get('guard_mode') == 'open')
+                numbered = pseudonyms.CURRENT.set(book)
                 try:
                     replacement, categories, partial = tool_guard.transform(value, source, event_id)
                 finally:
+                    pseudonyms.CURRENT.reset(numbered)
                     tool_guard.GUARD_OPEN.reset(guard)
                     tool_guard.ADDRESS_MASKING.reset(address)
                     tool_guard.OTHER_LANGUAGES.reset(other)

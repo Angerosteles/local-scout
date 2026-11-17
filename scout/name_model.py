@@ -32,6 +32,8 @@ _SENT_END_RE, _COLON_BEFORE_RE = re.compile(r'[.!?\n]\s*$'), re.compile(r':\s*$'
 _LODZ_WAW_RE = re.compile(r'(?i:Łodzi|Warszawie)')
 _COORD_GAP_RE = re.compile(r'[ \t]*(?:,[ \t]*(?:and[ \t]+)?|and[ \t]+)')
 _WORD_RE, _ALPHA_RE, _FOLLOW_RE, _ADJ_RE = re.compile(r"[^\W\d_]+"), re.compile(r'[A-Za-z]+'), re.compile(r'\s*([A-Za-z]+)'), re.compile(r'([A-Za-z]+)[ \t]+$')
+_IDENTIFIER_LABEL = re.compile(r'(?i:(?:numer|number|kod|polish)[ \t]+)(?:PESEL|SSN|IBAN|NIP|REGON|EIN|ITIN)')
+_VERSIONED_EDITION = re.compile(r'\b[A-Z][a-z]+[ \t]+Edition(?=[ \t]+v?\d+\.\d)')
 
 
 @lru_cache(maxsize=1)
@@ -46,6 +48,22 @@ def _h(value, mask):
     return zlib.crc32(value.encode('utf-8')) & mask
 
 
+@lru_cache(maxsize=4)
+def _const_hashes(mask):
+    return (
+        _h('start', mask),
+        _h('mid', mask),
+        _h('colon_before', mask),
+        _h('pcap', mask),
+        _h('plow', mask),
+        _h('cue', mask),
+        _h('ncap', mask),
+        _h('nlow', mask),
+        _h('n:other', mask),
+        _h('end', mask),
+    )
+
+
 @lru_cache(maxsize=8192)
 def _word_base_hashes(w, lf_bin, mask):
     b = '^' + w.lower() + '$'
@@ -57,29 +75,52 @@ def _word_base_hashes(w, lf_bin, mask):
     return tuple(_h(x, mask) for x in f)
 
 
+@lru_cache(maxsize=8192)
+def _model_word_base_hashes(w, mask):
+    lf = _model()[2].get(w.lower(), 0)
+    return _word_base_hashes(w, min(int(math.log2(lf + 1)), 12) if lf else 0, mask)
+
+
 def _features(text, toks, i, lowfreq, cues, mask):
     s, e, w = toks[i]
-    lf = lowfreq.get(w.lower(), 0)
-    out = list(_word_base_hashes(w, min(int(math.log2(lf + 1)), 12) if lf else 0, mask))
+    if lowfreq is _model()[2]:
+        base = _model_word_base_hashes(w, mask)
+    else:
+        lf = lowfreq.get(w.lower(), 0)
+        base = _word_base_hashes(w, min(int(math.log2(lf + 1)), 12) if lf else 0, mask)
+    out = list(base)
+    h_start, h_mid, h_colon, h_pcap, h_plow, h_cue, h_ncap, h_nlow, h_nother, h_end = _const_hashes(mask)
     prev = toks[i - 1] if i > 0 else None
     nxt = toks[i + 1] if i + 1 < len(toks) else None
-    gap_prev = text[prev[1]:s] if prev else text[:s]
-    out.append(_h('start' if not prev or _SENT_END_RE.search(gap_prev) else 'mid', mask))
-    if _COLON_BEFORE_RE.search(gap_prev):
-        out.append(_h('colon_before', mask))
-    if prev:
-        pl = prev[2].lower()
-        out.append(_h('p:' + pl if pl in cues else 'pcap' if prev[2][:1].isupper() else 'plow', mask))
-        if pl in cues:
-            out.append(_h('cue', mask))
-    if i > 1 and toks[i - 2][2].lower() in cues:
-        out.append(_h('pp:' + toks[i - 2][2].lower(), mask))
-    if nxt:
-        out.append(_h('ncap' if nxt[2][:1].isupper() and text[e:nxt[0]] in (' ', '-') else 'nlow', mask))
-        nl = nxt[2].lower()
-        out.append(_h('n:' + nl if nl in cues else 'n:other', mask))
+    if not prev:
+        out.append(h_start)
+        gap_prev = text[:s]
+        if ':' in gap_prev and _COLON_BEFORE_RE.search(gap_prev):
+            out.append(h_colon)
     else:
-        out.append(_h('end', mask))
+        gap_prev = text[prev[1]:s]
+        if gap_prev == ' ':
+            out.append(h_mid)
+        else:
+            out.append(h_start if _SENT_END_RE.search(gap_prev) else h_mid)
+            if ':' in gap_prev and _COLON_BEFORE_RE.search(gap_prev):
+                out.append(h_colon)
+        pl = prev[2].lower()
+        if pl in cues:
+            out.append(_h('p:' + pl, mask))
+            out.append(h_cue)
+        else:
+            out.append(h_pcap if prev[2][:1].isupper() else h_plow)
+    if i > 1:
+        ppl = toks[i - 2][2].lower()
+        if ppl in cues:
+            out.append(_h('pp:' + ppl, mask))
+    if nxt:
+        out.append(h_ncap if nxt[2][:1].isupper() and text[e:nxt[0]] in (' ', '-') else h_nlow)
+        nl = nxt[2].lower()
+        out.append(_h('n:' + nl, mask) if nl in cues else h_nother)
+    else:
+        out.append(h_end)
     return out
 
 
@@ -108,7 +149,8 @@ class LegacyScore:
             return ({i: lprob[0][i] for i in candidates}, lprob[1], lprob[2])
         weights, bias, freq, cues, mask, high, low = _model()
         prev = dict(lprob[0]) if lprob is not None else {}
-        out = {i: prev[i] if i in prev else 1.0 / (1.0 + math.exp(-max(-60., min(60., bias + sum(weights[f] for f in _features(text, toks, i, freq, cues, mask))))))
+        w_get = weights.__getitem__
+        out = {i: prev[i] if i in prev else 1.0 / (1.0 + math.exp(-max(-60., min(60., bias + sum(map(w_get, _features(text, toks, i, freq, cues, mask)))))))
                for i in candidates}
         if cache is not None:
             cache[('lprob', text)] = ({**prev, **out}, high, low)
@@ -157,7 +199,7 @@ def spans(text, *, backend=None):
         prob, high, low = LegacyScore().score(text, toks, cand)
     else:
         prob, high, low = backend.score(text, toks, cand)
-    non_person = {m.start() + t.start() for m in _NON_PERSON.finditer(text) for t in TOKEN.finditer(m.group())}
+    non_person = {m.start() + t.start() for m in _NON_PERSON.finditer(text) for t in TOKEN.finditer(m.group())} if 'Pan' in text else set()
     non_person.update(m.start('word') for m in _SENTENCE_COMMON.finditer(text))
     paragraphs = list(language.paragraphs(text))
     starts = [offset for offset, _ in paragraphs]
@@ -243,13 +285,30 @@ _SINGLE_CUES = frozenset('hi hello hey dear thanks thank cc by from to with ask 
 
 _GREETING_WORDS = frozenset('cześć czesc witaj witam hej'.split())
 _DISCOURSE_WORDS = frozenset('and or but yet so although though because while whereas if then meanwhile'.split())
+_PARTICLES = frozenset('van der de da di von le la del della bin ibn al'.split())
+# Leading discourse/contact words never start a person's name here (closed class, not names).
+_LEAD_CUES = frozenset('hey hi hello morning evening afternoon thanks could would can should please reach call send ping notify email ask tell cc attn'.split())
+_EN_TITLES = frozenset('mr mrs ms miss dr prof professor capt captain'.split())
+_ORDINARY_LEADERS = _LEAD_CUES | _GREETING_WORDS | _DISCOURSE_WORDS
+_CONTACT_EXCLUDED = _BOUNDARIES | _EN_TITLES
+_LIST_EXCLUDED = _BOUNDARIES | _LEAD_CUES | _EN_TITLES
+_SINGLETON_CUES = _SINGLE_CUES | _LEAD_CUES
+_CLOSING_TITLES = _EN_TITLES | frozenset(('best', 'regards', 'cheers', 'sincerely'))
+_TITLE_WORDS = _EN_TITLES | _HONORIFICS | frozenset(('mx',))
+_SPACE_TAB_RE = re.compile(r'[ \t]+')
+_COMMA_SPACE_RE = re.compile(r',[ \t]+')
+_LOWER_WORD_RE = re.compile(r'[ \t]+([a-z]+)\b')
+_BEFORE_LOWER_RE = re.compile(r'\b([a-z]+)[ \t]+$')
+_CUED_RE = re.compile(r'(?i)\b(?:hi|hello|hey|dear|thanks|thank|cc|attn|' + '|'.join(sorted(_EN_TITLES)) + r')[ \t]*[.:]?[ \t]+$')
+_WORD_DOT_RE = re.compile(r"[^\W\d_]+\.?")
 
 
+@lru_cache(maxsize=8192)
 def _ordinary_leader(word):
     """Ordinary adverbs, conjunctions and greetings cannot seed a person's name."""
     from .name_model_g import classes
-    return (word.lower() in _LEAD_CUES | _GREETING_WORDS | _DISCOURSE_WORDS
-            or 'r' in classes(word.lower())[0])
+    w = word.lower()
+    return w in _ORDINARY_LEADERS or 'r' in classes(w)[0]
 
 
 def _name_boundaries(text, names):
@@ -276,7 +335,7 @@ def _contact_names(text):
         left, first, last = toks[i-1:i+2]
         if (not first[2].istitle() or not last[2].istitle()
                 or min(len(first[2]), len(last[2])) < 2
-                or not re.fullmatch(r'[ \t]+', text[left[1]:first[0]])
+                or not _SPACE_TAB_RE.fullmatch(text[left[1]:first[0]])
                 or text[first[1]:last[0]] != ' '
                 or first[0] and (text[first[0]-1].isalnum() or text[first[0]-1] == '_')
                 or last[1] < len(text) and (text[last[1]].isalnum() or text[last[1]] == '_')):
@@ -288,7 +347,7 @@ def _contact_names(text):
             continue
         # Reuse the existing ordinary-frequency band; no model threshold is changed.
         if any(bucket(freq, t[2]) >= 2 or _ordinary_leader(t[2])
-               or t[2].lower() in _BOUNDARIES | _EN_TITLES for t in (first, last)):
+               or t[2].lower() in _CONTACT_EXCLUDED for t in (first, last)):
             continue
         # Ordinary dictionary nouns such as Marketing/Team do not constitute a rare name pair.
         surname_senses = {'noun.person', 'noun.animal', 'noun.plant', 'noun.time'}
@@ -304,20 +363,27 @@ def _contact_names(text):
 
 def _name_lists(text):
     """Syntactic lists, independent of which members the model detected."""
-    non_person = [(m.start(), m.end()) for m in _NON_PERSON.finditer(text)]
+    cache = language.CACHE.get()
+    if cache is not None and ('name_lists', text) in cache:
+        return cache[('name_lists', text)]
+    non_person = [(m.start(), m.end()) for m in _NON_PERSON.finditer(text)] if 'Pan' in text else ()
     candidates = [(s, e, 'name') for s, e, w in tokens(text)
-                  if w[:1].isupper() and len(w) >= 2 and w.lower() not in _BOUNDARIES | _LEAD_CUES | _EN_TITLES
+                  if w[:1].isupper() and len(w) >= 2 and w.lower() not in _LIST_EXCLUDED
                   and not (s and (text[s-1].isalnum() or text[s-1] == '_'))
                   and not (e < len(text) and (text[e].isalnum() or text[e] == '_'))
                   and not any(a < e and s < b for a, b in non_person)]
     groups, group = [], []
     for candidate in candidates:
-        if group and not _COORD_GAP_RE.fullmatch( text[group[-1][1]:candidate[0]]):
-            groups.append(group)
+        if group and not _COORD_GAP_RE.fullmatch(text[group[-1][1]:candidate[0]]):
+            if len(group) >= 2:
+                groups.append(group)
             group = []
         group.append(candidate)
-    groups.append(group)
-    return [group for group in groups if len(group) >= 2]
+    if len(group) >= 2:
+        groups.append(group)
+    if cache is not None:
+        cache[('name_lists', text)] = groups
+    return groups
 
 
 def _reversed_pair(text, group):
@@ -326,12 +392,12 @@ def _reversed_pair(text, group):
     if len(group) != 2:
         return False
     (s, e, _), (a, b, _) = group
-    if not re.fullmatch(r',[ \t]+', text[e:a]):
+    if not _COMMA_SPACE_RE.fullmatch(text[e:a]):
         return False
     word = text[s:e].lower()
     pos, sem = classes(word)
     # Person-only occupational senses also occur as surnames (e.g. Smith).
-    if word in _SINGLE_CUES | _LEAD_CUES or pos and set(sem) != {'noun.person'}:
+    if word in _SINGLETON_CUES or pos and set(sem) != {'noun.person'}:
         return False
     before, after = text[:s], text[b:]
     csv = (re.search(r'(?:^|[,;\r\n])[ \t]*"$', before)
@@ -348,7 +414,7 @@ def _list_person_context(text, group, names):
     def verb_senses(word):
         return {key: value for stem in roots(word) for key, value in classes(stem)[1].items()
                 if key.startswith('verb.')}
-    after = re.match(r'[ \t]+([a-z]+)\b', text[group[-1][1]:])
+    after = _LOWER_WORD_RE.match(text, group[-1][1])
     following = after[1] if after else ''
     verbs = verb_senses(following) if following else {}
     pos = classes(following)[0] if following else {}
@@ -358,18 +424,17 @@ def _list_person_context(text, group, names):
             or following.endswith('s') and not pos and not verbs):
         return False
     if modal:
-        tail = re.match(r'[ \t]+([a-z]+)\b', text[group[-1][1] + after.end():])
+        tail = _LOWER_WORD_RE.match(text, after.end())
         verbs = verb_senses(tail[1]) if tail else {}
     person_action = sum(v for k, v in verbs.items() if k in actions) > sum(verbs.values()) / 2
     full_words = {w for s, e, _ in names if len(tokens(text[s:e])) >= 2
                   and not (s < group[-1][1] and group[0][0] < e)
                   for _, _, w in tokens(text[s:e])}
     def cued(span):
-        return bool(re.search(r'(?i)\b(?:hi|hello|hey|dear|thanks|thank|cc|attn|'
-                              + '|'.join(sorted(_EN_TITLES)) + r')[ \t]*[.:]?[ \t]+$', text[:span[0]]))
+        return bool(_CUED_RE.search(text[max(0, span[0] - 32):span[0]]))
     full_words.update(text[s:e] for s, e, kind in names if cued((s, e, kind)))
     confirmed = any(text[s:e] in full_words or cued((s, e, kind)) for s, e, kind in group)
-    before = re.search(r'\b([a-z]+)[ \t]+$', text[:group[0][0]])
+    before = _BEFORE_LOWER_RE.search(text[max(0, group[0][0] - 48):group[0][0]])
     previous = verb_senses(before[1]) if before else {}
     # Require a predominantly interpersonal verb, not a polysemous cover/mix.
     object_context = sum(v for k, v in previous.items() if k in contact) > sum(previous.values()) / 2
@@ -433,18 +498,14 @@ def _singletons_with_evidence(text, names, evidence=None):
                          and bool({'verb.communication', 'verb.social', 'verb.contact'} & classes(previous)[1].keys()))
         role = bool(adjacent) and _role_noun(previous)
         if ((s, e, kind) in coordinated or word in full_words
-                or previous in _EN_TITLES | {'best', 'regards', 'cheers', 'sincerely'}
-                or (s, e, kind) not in unsupported and (previous in _SINGLE_CUES | _LEAD_CUES
+                or previous in _CLOSING_TITLES
+                or (s, e, kind) not in unsupported and (previous in _SINGLETON_CUES
                                                        or person_action or role or alone or speaker or start and verbs[following]
                                                        or _ordinary_leader(previous) and following.islower())):
             kept.append((s, e, kind))
     return kept
 
 
-_PARTICLES = frozenset('van der de da di von le la del della bin ibn al'.split())
-# Leading discourse/contact words never start a person's name here (closed class, not names).
-_LEAD_CUES = frozenset('hey hi hello morning evening afternoon thanks could would can should please reach call send ping notify email ask tell cc attn'.split())
-_EN_TITLES = frozenset('mr mrs ms miss dr prof professor capt captain'.split())
 _PARTICLE_TAIL_RE = re.compile(r'(?:[ \t]+(?:' + '|'.join(sorted(_PARTICLES)) + r'))+[ \t]+(' + TOKEN.pattern + r')')
 _AL_TAIL_RE = re.compile(r'[ \t]+al-(' + TOKEN.pattern + r')')
 
@@ -483,8 +544,8 @@ def _english_boundaries(text, names):
 
 def _titled(text, span):
     """A title or honorific right before a single name identifies the person like a full name (Mr. Smith, Panie Tomaszu)."""
-    before = re.findall(r"[^\W\d_]+\.?", text[max(0, span[0]-16):span[0]])
-    return bool(before) and before[-1].rstrip('.').lower() in _EN_TITLES | _HONORIFICS | {'mx'}
+    before = _WORD_DOT_RE.findall(text[max(0, span[0]-16):span[0]])
+    return bool(before) and before[-1].rstrip('.').lower() in _TITLE_WORDS
 
 
 def _prompt_spans_existing(text, mode="deep"):
@@ -507,9 +568,13 @@ def _prompt_spans_existing(text, mode="deep"):
     for _, paragraph in parts:
         try:
             cache = language.CACHE.get()
-            probabilities = paragraph_context.classify(paragraph)['lang']
-            if cache is not None:
-                cache[('pc_lang', paragraph, id(paragraph_context.classify))] = probabilities
+            pc_key = ('pc_lang', paragraph, id(paragraph_context.classify))
+            if cache is not None and pc_key in cache:
+                probabilities = cache[pc_key]
+            else:
+                probabilities = paragraph_context.classify(paragraph)['lang']
+                if cache is not None:
+                    cache[pc_key] = probabilities
             # Only confident English takes the English path; uncertain text keeps the previous detector (deep) or its
             # basic-level filter (basic), so a short Polish line is not judged by the English models.
             selected.append(max(probabilities, key=probabilities.get) == 'EN'
@@ -525,7 +590,7 @@ def _prompt_spans_existing(text, mode="deep"):
     def english(span):
         return selected[bisect_right(starts, span[0])-1]
     try:
-        non_person = [(m.start(), m.end()) for m in _NON_PERSON.finditer(text)]
+        non_person = [(m.start(), m.end()) for m in _NON_PERSON.finditer(text)] if 'Pan' in text else ()
         fresh = [span for span in spans(text, backend='g_full_r1') if english(span)
                  and not any(a < span[1] and span[0] < b for a, b in non_person)]
         fresh = sorted(set(_name_boundaries(text, fresh) + [x for x in contact_names if english(x)]))
@@ -550,7 +615,9 @@ def _prompt_spans_existing(text, mode="deep"):
 def prompt_spans(text, mode="deep", other_languages="off"):
     if mode not in ("basic", "deep") or other_languages not in ("on", "off"):
         raise ValueError("invalid name masking mode")
-    found = _name_boundaries(text, _prompt_spans_existing(text, mode=mode))
+    labels = [m.span() for pattern in (_IDENTIFIER_LABEL, _VERSIONED_EDITION) for m in pattern.finditer(text)]
+    found = [span for span in _name_boundaries(text, _prompt_spans_existing(text, mode=mode))
+             if not any(a <= span[0] and span[1] <= b for a,b in labels)]
     if not isinstance(text, str) or not text:
         return found
     parts = list(language.paragraphs(text))
